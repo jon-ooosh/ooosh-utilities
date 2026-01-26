@@ -23,6 +23,7 @@
  * 
  * v1.0 - Initial implementation (date trigger only)
  * v1.1 - Added rehearsal status trigger
+ * v1.2 - Added retry logic for API calls
  */
 
 // Board configuration
@@ -34,6 +35,13 @@ const REHEARSAL_LABEL = 'Rehearsal';               // Status label that skips th
 
 // Columns that trigger this automation
 const MONITORED_COLUMNS = [SOURCE_DATE_COLUMN, VEHICLE_STATUS_COLUMN];
+
+// Retry configuration
+const RETRY_CONFIG = {
+  maxAttempts: 3,
+  baseDelayMs: 1000,  // 1 second, doubles each retry
+  retryableErrors: ['ETIMEDOUT', 'ECONNRESET', 'rate limit', 'timeout', '429', '500', '502', '503', '504']
+};
 
 exports.handler = async (event) => {
   console.log('📅 Date copy automation triggered');
@@ -119,7 +127,7 @@ exports.handler = async (event) => {
       console.log('🎯 Trigger: Rehearsal status changed');
     }
 
-    // Fetch the item to get current column values
+    // Fetch the item to get current column values (with retry)
     console.log(`🔍 Fetching item ${itemId} details...`);
     const itemData = await fetchItemDetails(itemId);
     
@@ -187,7 +195,7 @@ exports.handler = async (event) => {
       };
     }
 
-    // Update the target column
+    // Update the target column (with retry)
     await updateDateColumn(itemId, TARGET_DATE_COLUMN, targetDate);
 
     console.log('✅ Date copy complete');
@@ -218,7 +226,7 @@ exports.handler = async (event) => {
 };
 
 // ============================================================================
-// MONDAY.COM API HELPERS
+// MONDAY.COM API HELPERS (with retry logic)
 // ============================================================================
 
 /**
@@ -239,7 +247,7 @@ async function fetchItemDetails(itemId) {
     }
   `;
 
-  const result = await callMondayAPI(query);
+  const result = await callMondayAPIWithRetry(query);
   
   if (result.data?.items?.[0]) {
     return result.data.items[0];
@@ -269,11 +277,53 @@ async function updateDateColumn(itemId, columnId, dateValue) {
     }
   `;
 
-  return await callMondayAPI(mutation);
+  return await callMondayAPIWithRetry(mutation);
 }
 
 /**
- * Make a call to Monday.com GraphQL API
+ * Make a call to Monday.com GraphQL API with retry logic
+ */
+async function callMondayAPIWithRetry(query) {
+  let lastError;
+  
+  for (let attempt = 1; attempt <= RETRY_CONFIG.maxAttempts; attempt++) {
+    try {
+      // Add delay before retry (not on first attempt)
+      if (attempt > 1) {
+        const delay = RETRY_CONFIG.baseDelayMs * Math.pow(2, attempt - 2);
+        console.log(`⏳ Retry attempt ${attempt}/${RETRY_CONFIG.maxAttempts} after ${delay}ms...`);
+        await sleep(delay);
+      }
+      
+      return await callMondayAPI(query);
+      
+    } catch (error) {
+      lastError = error;
+      
+      // Check if this error is retryable
+      const isRetryable = RETRY_CONFIG.retryableErrors.some(errType => 
+        error.message?.toLowerCase().includes(errType.toLowerCase())
+      );
+      
+      if (!isRetryable) {
+        console.log(`❌ Non-retryable error: ${error.message}`);
+        throw error;
+      }
+      
+      if (attempt === RETRY_CONFIG.maxAttempts) {
+        console.log(`❌ All ${RETRY_CONFIG.maxAttempts} attempts failed`);
+        throw error;
+      }
+      
+      console.log(`⚠️ Attempt ${attempt} failed (${error.message}), will retry...`);
+    }
+  }
+  
+  throw lastError;
+}
+
+/**
+ * Make a single call to Monday.com GraphQL API
  */
 async function callMondayAPI(query) {
   const token = process.env.MONDAY_API_TOKEN;
@@ -318,7 +368,7 @@ function getColumnValue(columnValues, columnId) {
     try {
       const parsed = JSON.parse(column.value);
       if (parsed.date) {
-        return parsed.date;  // Returns "YYYY-MM-DD"
+        return parsed.date;
       }
     } catch (e) {
       // Fall back to text
@@ -375,4 +425,11 @@ function subtractOneDay(dateString) {
  */
 function escapeJson(str) {
   return str.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+/**
+ * Sleep for specified milliseconds
+ */
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }

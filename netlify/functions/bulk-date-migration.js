@@ -8,16 +8,23 @@
  * - If "Rehearsal" → copy date as-is
  * - Otherwise → copy date PLUS one day
  * 
+ * CHUNKED APPROACH: Processes 200 items per run to avoid Netlify's 60s timeout.
+ * Run multiple times until it reports "COMPLETE".
+ * 
  * USAGE:
  * - Dry run (preview only): 
  *   https://ooosh-utilities.netlify.app/.netlify/functions/bulk-date-migration
  * 
- * - Actually run the migration:
+ * - Execute one chunk:
  *   https://ooosh-utilities.netlify.app/.netlify/functions/bulk-date-migration?execute=true
+ * 
+ * - Continue from specific cursor (auto-provided in response):
+ *   https://ooosh-utilities.netlify.app/.netlify/functions/bulk-date-migration?execute=true&cursor=XXXXX
  * 
  * DELETE THIS FUNCTION AFTER USE - it's not needed ongoing.
  * 
  * v1.0 - Initial implementation
+ * v1.1 - Chunked approach to handle large boards
  */
 
 // Board configuration
@@ -27,12 +34,12 @@ const TARGET_DATE_COLUMN = 'date_mkzzmse7';        // Where we're copying TO
 const VEHICLE_STATUS_COLUMN = 'dup__of_vehicle_';  // Rehearsal status
 const REHEARSAL_LABEL = 'Rehearsal';
 
-// Rate limiting - Monday.com allows ~50 requests per minute for mutations
-const BATCH_SIZE = 25;           // Items to update per batch
-const DELAY_BETWEEN_BATCHES = 2000;  // 2 seconds between batches
+// Chunking configuration - keep well under 60s timeout
+const ITEMS_PER_FETCH = 200;     // Items to fetch from Monday.com per run
+const DELAY_BETWEEN_UPDATES = 100;  // 100ms between updates (rate limiting)
 
 exports.handler = async (event) => {
-  console.log('🔄 Bulk date migration initiated');
+  console.log('🔄 Bulk date migration initiated (chunked mode)');
   const startTime = Date.now();
   
   const headers = {
@@ -46,19 +53,20 @@ exports.handler = async (event) => {
     return { statusCode: 200, headers, body: '' };
   }
 
-  // Check if this is a dry run or actual execution
+  // Check parameters
   const params = event.queryStringParameters || {};
   const executeForReal = params.execute === 'true';
+  const startCursor = params.cursor || null;  // Resume from this cursor
 
   try {
-    // Step 1: Fetch all items from the board
-    console.log('📋 Fetching all items from board...');
-    const allItems = await fetchAllItems();
-    console.log(`📊 Found ${allItems.length} items total`);
+    // Step 1: Fetch ONE chunk of items
+    console.log(`📋 Fetching up to ${ITEMS_PER_FETCH} items...`);
+    const { items, nextCursor } = await fetchItemsChunk(startCursor);
+    console.log(`📊 Fetched ${items.length} items`);
 
-    // Step 2: Analyze each item and determine what needs updating
+    // Step 2: Analyze this chunk
     const analysis = {
-      totalItems: allItems.length,
+      itemsFetched: items.length,
       itemsWithSourceDate: 0,
       itemsNeedingUpdate: 0,
       itemsAlreadyCorrect: 0,
@@ -66,156 +74,140 @@ exports.handler = async (event) => {
       rehearsals: 0,
       nonRehearsals: 0,
       updates: [],
-      skipped: [],
-      errors: []
+      skipped: []
     };
 
-    for (const item of allItems) {
-      try {
-        const sourceDate = getColumnValue(item.column_values, SOURCE_DATE_COLUMN);
-        const currentTargetDate = getColumnValue(item.column_values, TARGET_DATE_COLUMN);
-        const vehicleStatus = getStatusLabel(item.column_values, VEHICLE_STATUS_COLUMN);
-        const isRehearsal = vehicleStatus === REHEARSAL_LABEL;
+    for (const item of items) {
+      const sourceDate = getColumnValue(item.column_values, SOURCE_DATE_COLUMN);
+      const currentTargetDate = getColumnValue(item.column_values, TARGET_DATE_COLUMN);
+      const vehicleStatus = getStatusLabel(item.column_values, VEHICLE_STATUS_COLUMN);
+      const isRehearsal = vehicleStatus === REHEARSAL_LABEL;
 
-        // Skip if no source date
-        if (!sourceDate) {
-          analysis.skipped.push({
-            itemId: item.id,
-            name: item.name,
-            reason: 'No source date set'
-          });
-          analysis.itemsSkipped++;
-          continue;
-        }
-
-        analysis.itemsWithSourceDate++;
-
-        // Calculate what the target date should be
-        let calculatedTargetDate;
-        if (isRehearsal) {
-          calculatedTargetDate = sourceDate;  // Copy as-is
-          analysis.rehearsals++;
-        } else {
-          calculatedTargetDate = addOneDay(sourceDate);  // Add one day
-          analysis.nonRehearsals++;
-        }
-
-        // Check if update is needed
-        if (currentTargetDate === calculatedTargetDate) {
-          analysis.itemsAlreadyCorrect++;
-          continue;
-        }
-
-        // Record the update needed
-        analysis.itemsNeedingUpdate++;
-        analysis.updates.push({
+      // Skip if no source date
+      if (!sourceDate) {
+        analysis.skipped.push({
           itemId: item.id,
           name: item.name,
-          sourceDate,
-          currentTargetDate: currentTargetDate || '(empty)',
-          newTargetDate: calculatedTargetDate,
-          isRehearsal,
-          rule: isRehearsal ? 'copy-as-is' : 'plus-one-day'
+          reason: 'No source date set'
         });
-
-      } catch (itemError) {
-        analysis.errors.push({
-          itemId: item.id,
-          name: item.name,
-          error: itemError.message
-        });
+        analysis.itemsSkipped++;
+        continue;
       }
+
+      analysis.itemsWithSourceDate++;
+
+      // Calculate what the target date should be
+      let calculatedTargetDate;
+      if (isRehearsal) {
+        calculatedTargetDate = sourceDate;
+        analysis.rehearsals++;
+      } else {
+        calculatedTargetDate = addOneDay(sourceDate);
+        analysis.nonRehearsals++;
+      }
+
+      // Check if update is needed
+      if (currentTargetDate === calculatedTargetDate) {
+        analysis.itemsAlreadyCorrect++;
+        continue;
+      }
+
+      // Record the update needed
+      analysis.itemsNeedingUpdate++;
+      analysis.updates.push({
+        itemId: item.id,
+        name: item.name,
+        sourceDate,
+        currentTargetDate: currentTargetDate || '(empty)',
+        newTargetDate: calculatedTargetDate,
+        isRehearsal,
+        rule: isRehearsal ? 'copy-as-is' : 'plus-one-day'
+      });
     }
 
-    // Step 3: If this is a dry run, just return the analysis
+    // Step 3: If dry run, just return analysis
     if (!executeForReal) {
-      console.log('🔍 Dry run complete - no changes made');
-      
       return {
         statusCode: 200,
         headers,
         body: JSON.stringify({
           mode: 'DRY RUN - No changes made',
-          instruction: 'Add ?execute=true to URL to actually run the migration',
-          summary: {
-            totalItems: analysis.totalItems,
-            itemsWithSourceDate: analysis.itemsWithSourceDate,
+          instruction: 'Add ?execute=true to URL to run this chunk',
+          chunk: {
+            itemsFetched: analysis.itemsFetched,
             itemsNeedingUpdate: analysis.itemsNeedingUpdate,
             itemsAlreadyCorrect: analysis.itemsAlreadyCorrect,
             itemsSkipped: analysis.itemsSkipped,
-            rehearsals: analysis.rehearsals,
-            nonRehearsals: analysis.nonRehearsals,
-            errors: analysis.errors.length
+            hasMoreItems: !!nextCursor
           },
-          // Show first 50 updates as preview
-          updatePreview: analysis.updates.slice(0, 50),
-          totalUpdatesQueued: analysis.updates.length,
-          skipped: analysis.skipped.slice(0, 20),
-          errors: analysis.errors
+          updatePreview: analysis.updates.slice(0, 20),
+          nextCursor: nextCursor || null,
+          nextUrl: nextCursor 
+            ? `?execute=true&cursor=${encodeURIComponent(nextCursor)}`
+            : null
         }, null, 2)
       };
     }
 
-    // Step 4: Execute the updates in batches
+    // Step 4: Execute updates for this chunk
     console.log(`🚀 Executing ${analysis.updates.length} updates...`);
     
     let successCount = 0;
     let failCount = 0;
-    const failedUpdates = [];
+    const failures = [];
 
-    // Process in batches
-    for (let i = 0; i < analysis.updates.length; i += BATCH_SIZE) {
-      const batch = analysis.updates.slice(i, i + BATCH_SIZE);
-      const batchNumber = Math.floor(i / BATCH_SIZE) + 1;
-      const totalBatches = Math.ceil(analysis.updates.length / BATCH_SIZE);
-      
-      console.log(`📦 Processing batch ${batchNumber}/${totalBatches} (${batch.length} items)...`);
-
-      // Process each item in the batch
-      for (const update of batch) {
-        try {
-          await updateDateColumn(update.itemId, TARGET_DATE_COLUMN, update.newTargetDate);
-          successCount++;
-          console.log(`  ✅ Updated item ${update.itemId}: ${update.sourceDate} → ${update.newTargetDate}`);
-        } catch (updateError) {
-          failCount++;
-          failedUpdates.push({
-            itemId: update.itemId,
-            name: update.name,
-            error: updateError.message
-          });
-          console.log(`  ❌ Failed item ${update.itemId}: ${updateError.message}`);
+    for (const update of analysis.updates) {
+      try {
+        await updateDateColumn(update.itemId, TARGET_DATE_COLUMN, update.newTargetDate);
+        successCount++;
+        console.log(`  ✅ ${update.itemId}: ${update.sourceDate} → ${update.newTargetDate}`);
+        
+        // Small delay between updates
+        if (analysis.updates.indexOf(update) < analysis.updates.length - 1) {
+          await sleep(DELAY_BETWEEN_UPDATES);
         }
-      }
-
-      // Delay between batches (except for the last one)
-      if (i + BATCH_SIZE < analysis.updates.length) {
-        console.log(`  ⏳ Waiting ${DELAY_BETWEEN_BATCHES}ms before next batch...`);
-        await sleep(DELAY_BETWEEN_BATCHES);
+      } catch (error) {
+        failCount++;
+        failures.push({ itemId: update.itemId, name: update.name, error: error.message });
+        console.log(`  ❌ ${update.itemId}: ${error.message}`);
       }
     }
 
     const duration = Date.now() - startTime;
-    console.log(`✅ Migration complete: ${successCount} updated, ${failCount} failed, took ${duration}ms`);
+    const isComplete = !nextCursor;
+
+    console.log(`✅ Chunk complete: ${successCount} updated, ${failCount} failed, ${duration}ms`);
+
+    // Build next URL for convenience
+    const nextUrl = nextCursor 
+      ? `?execute=true&cursor=${encodeURIComponent(nextCursor)}`
+      : null;
 
     return {
       statusCode: 200,
       headers,
       body: JSON.stringify({
         mode: 'EXECUTED',
-        summary: {
-          totalItems: analysis.totalItems,
-          itemsProcessed: analysis.updates.length,
-          successfulUpdates: successCount,
-          failedUpdates: failCount,
-          itemsAlreadyCorrect: analysis.itemsAlreadyCorrect,
-          itemsSkipped: analysis.itemsSkipped,
+        status: isComplete ? '🎉 COMPLETE - All items processed!' : '⏳ MORE TO DO - Run again with cursor',
+        chunk: {
+          itemsFetched: analysis.itemsFetched,
+          updatesAttempted: analysis.updates.length,
+          successful: successCount,
+          failed: failCount,
+          alreadyCorrect: analysis.itemsAlreadyCorrect,
+          skipped: analysis.itemsSkipped,
           durationMs: duration
         },
-        failures: failedUpdates,
-        message: failCount === 0 
-          ? '🎉 All updates completed successfully!' 
-          : `⚠️ ${failCount} items failed - see failures array for details`
+        hasMoreItems: !isComplete,
+        nextCursor: nextCursor || null,
+        nextUrl: nextUrl,
+        nextFullUrl: nextUrl 
+          ? `https://ooosh-utilities.netlify.app/.netlify/functions/bulk-date-migration${nextUrl}`
+          : null,
+        failures: failures.length > 0 ? failures : undefined,
+        instruction: isComplete 
+          ? 'Migration complete! You can now delete this function.'
+          : 'Copy the nextFullUrl and paste it in your browser to continue.'
       }, null, 2)
     };
 
@@ -224,7 +216,10 @@ exports.handler = async (event) => {
     return {
       statusCode: 500,
       headers,
-      body: JSON.stringify({ error: error.message })
+      body: JSON.stringify({ 
+        error: error.message,
+        tip: 'If this keeps happening, try again - might be a temporary Monday.com issue'
+      })
     };
   }
 };
@@ -234,71 +229,60 @@ exports.handler = async (event) => {
 // ============================================================================
 
 /**
- * Fetch ALL items from the board using cursor-based pagination
+ * Fetch a chunk of items from the board
  */
-async function fetchAllItems() {
-  const allItems = [];
-  let cursor = null;
-  let pageCount = 0;
-
-  do {
-    pageCount++;
-    console.log(`  📄 Fetching page ${pageCount}...`);
-
-    const query = cursor
-      ? `query {
-          next_items_page(cursor: "${cursor}", limit: 100) {
-            cursor
-            items {
+async function fetchItemsChunk(cursor) {
+  let query;
+  
+  if (cursor) {
+    // Continue from cursor
+    query = `query {
+      next_items_page(cursor: "${cursor}", limit: ${ITEMS_PER_FETCH}) {
+        cursor
+        items {
+          id
+          name
+          column_values {
+            id
+            text
+            value
+          }
+        }
+      }
+    }`;
+  } else {
+    // First page
+    query = `query {
+      boards(ids: [${BOARD_ID}]) {
+        items_page(limit: ${ITEMS_PER_FETCH}) {
+          cursor
+          items {
+            id
+            name
+            column_values {
               id
-              name
-              column_values {
-                id
-                text
-                value
-              }
+              text
+              value
             }
           }
-        }`
-      : `query {
-          boards(ids: [${BOARD_ID}]) {
-            items_page(limit: 100) {
-              cursor
-              items {
-                id
-                name
-                column_values {
-                  id
-                  text
-                  value
-                }
-              }
-            }
-          }
-        }`;
+        }
+      }
+    }`;
+  }
 
-    const result = await callMondayAPI(query);
+  const result = await callMondayAPI(query);
 
-    let items, newCursor;
-
-    if (cursor) {
-      // Subsequent pages use next_items_page
-      items = result.data?.next_items_page?.items || [];
-      newCursor = result.data?.next_items_page?.cursor;
-    } else {
-      // First page uses boards.items_page
-      items = result.data?.boards?.[0]?.items_page?.items || [];
-      newCursor = result.data?.boards?.[0]?.items_page?.cursor;
-    }
-
-    allItems.push(...items);
-    cursor = newCursor;
-
-    console.log(`    Found ${items.length} items (total: ${allItems.length})`);
-
-  } while (cursor);
-
-  return allItems;
+  if (cursor) {
+    return {
+      items: result.data?.next_items_page?.items || [],
+      nextCursor: result.data?.next_items_page?.cursor || null
+    };
+  } else {
+    return {
+      items: result.data?.boards?.[0]?.items_page?.items || [],
+      nextCursor: result.data?.boards?.[0]?.items_page?.cursor || null
+    };
+  }
 }
 
 /**
@@ -358,9 +342,6 @@ async function callMondayAPI(query) {
 // UTILITY FUNCTIONS
 // ============================================================================
 
-/**
- * Get the date value from a column by ID
- */
 function getColumnValue(columnValues, columnId) {
   const column = columnValues.find(col => col.id === columnId);
   if (!column) return null;
@@ -379,9 +360,6 @@ function getColumnValue(columnValues, columnId) {
   return column.text || null;
 }
 
-/**
- * Get the status label from a status column
- */
 function getStatusLabel(columnValues, columnId) {
   const column = columnValues.find(col => col.id === columnId);
   if (!column) return null;
@@ -403,9 +381,6 @@ function getStatusLabel(columnValues, columnId) {
   return column.text || null;
 }
 
-/**
- * Add one day to a date string (YYYY-MM-DD format)
- */
 function addOneDay(dateString) {
   const date = new Date(dateString + 'T12:00:00Z');
   date.setUTCDate(date.getUTCDate() + 1);
@@ -417,16 +392,10 @@ function addOneDay(dateString) {
   return `${year}-${month}-${day}`;
 }
 
-/**
- * Escape JSON string for embedding in GraphQL
- */
 function escapeJson(str) {
   return str.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
 
-/**
- * Sleep for specified milliseconds
- */
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
