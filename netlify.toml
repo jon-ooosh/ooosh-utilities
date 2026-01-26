@@ -1,0 +1,19 @@
+# Netlify configuration for OOOSH Utilities
+# This repo contains monitoring and automation tools
+
+[build]
+  # No build step needed - just functions
+  publish = "."
+  functions = "netlify/functions"
+
+[functions]
+  # Use Node.js 18
+  node_bundler = "esbuild"
+
+# Allow the health check and dependency check to be called externally
+[[headers]]
+  for = "/.netlify/functions/*"
+  [headers.values]
+    Access-Control-Allow-Origin = "*"
+    Access-Control-Allow-Headers = "Content-Type"
+    Access-Control-Allow-Methods = "GET, POST, OPTIONS"

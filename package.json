@@ -1,0 +1,12 @@
+{
+  "name": "ooosh-utilities",
+  "version": "1.0.0",
+  "description": "OOOSH Operations Monitoring and Automation Utilities",
+  "private": true,
+  "dependencies": {
+    "nodemailer": "^6.9.7"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
