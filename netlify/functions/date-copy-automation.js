@@ -2,27 +2,38 @@
  * date-copy-automation.js
  * 
  * Webhook handler for Monday.com board 2431480012.
- * When date column "date_mkzzmse7" changes, copies the date to "dup__of_hire_starts"
- * with the following logic:
+ * Manages the relationship between date columns based on rehearsal status.
  * 
+ * TRIGGERS (two webhooks point here):
+ * 1. When "date_mkzzmse7" changes → recalculate target date
+ * 2. When "dup__of_vehicle_" changes → recalculate target date
+ * 
+ * LOGIC:
  * - If "dup__of_vehicle_" status is "Rehearsal" → copy date as-is
- * - Otherwise → copy date minus one day
+ * - Otherwise (including blank) → copy date minus one day
+ * 
+ * TARGET: "dup__of_hire_starts" receives the calculated date
  * 
  * Webhook setup in Monday.com:
  * 1. Go to Board > Integrations > Webhooks
- * 2. Create webhook for "When column changes"
- * 3. Select column: date_mkzzmse7
- * 4. URL: https://ooosh-utilities.netlify.app/.netlify/functions/date-copy-automation
+ * 2. Create TWO webhooks for "When column changes":
+ *    - Webhook 1: Column = date_mkzzmse7
+ *    - Webhook 2: Column = dup__of_vehicle_
+ * 3. Both use URL: https://ooosh-utilities.netlify.app/.netlify/functions/date-copy-automation
  * 
- * v1.0 - Initial implementation
+ * v1.0 - Initial implementation (date trigger only)
+ * v1.1 - Added rehearsal status trigger
  */
 
 // Board configuration
 const BOARD_ID = 2431480012;
-const SOURCE_DATE_COLUMN = 'date_mkzzmse7';        // The date that triggers the webhook
+const SOURCE_DATE_COLUMN = 'date_mkzzmse7';        // The source date
 const TARGET_DATE_COLUMN = 'dup__of_hire_starts';  // The date we write to
-const VEHICLE_STATUS_COLUMN = 'dup__of_vehicle_';  // Status column to check
+const VEHICLE_STATUS_COLUMN = 'dup__of_vehicle_';  // Status column (Rehearsal or blank)
 const REHEARSAL_LABEL = 'Rehearsal';               // Status label that skips the -1 day
+
+// Columns that trigger this automation
+const MONITORED_COLUMNS = [SOURCE_DATE_COLUMN, VEHICLE_STATUS_COLUMN];
 
 exports.handler = async (event) => {
   console.log('📅 Date copy automation triggered');
@@ -81,9 +92,9 @@ exports.handler = async (event) => {
 
     console.log(`📋 Event details: Board ${boardId}, Item ${itemId}, Column ${columnId}`);
 
-    // Verify this is the column we care about
-    if (columnId !== SOURCE_DATE_COLUMN) {
-      console.log(`⏭️ Ignoring change to column ${columnId} (not ${SOURCE_DATE_COLUMN})`);
+    // Verify this is a column we care about
+    if (!MONITORED_COLUMNS.includes(columnId)) {
+      console.log(`⏭️ Ignoring change to column ${columnId} (not monitored)`);
       return {
         statusCode: 200,
         headers,
@@ -99,6 +110,13 @@ exports.handler = async (event) => {
         headers,
         body: JSON.stringify({ message: 'Board not monitored', boardId })
       };
+    }
+
+    // Log which trigger fired
+    if (columnId === SOURCE_DATE_COLUMN) {
+      console.log('🎯 Trigger: Source date changed');
+    } else if (columnId === VEHICLE_STATUS_COLUMN) {
+      console.log('🎯 Trigger: Rehearsal status changed');
     }
 
     // Fetch the item to get current column values
@@ -118,10 +136,10 @@ exports.handler = async (event) => {
     const sourceDate = getColumnValue(itemData.column_values, SOURCE_DATE_COLUMN);
     const vehicleStatus = getStatusLabel(itemData.column_values, VEHICLE_STATUS_COLUMN);
 
-    console.log(`📅 Source date: ${sourceDate}`);
-    console.log(`🚗 Vehicle status: ${vehicleStatus}`);
+    console.log(`📅 Source date: ${sourceDate || '(not set)'}`);
+    console.log(`🎭 Rehearsal status: ${vehicleStatus || '(blank)'}`);
 
-    // If no date is set, nothing to copy
+    // If no source date is set, nothing to calculate
     if (!sourceDate) {
       console.log('⏭️ No date set in source column - nothing to copy');
       return {
@@ -131,19 +149,43 @@ exports.handler = async (event) => {
       };
     }
 
-    // Calculate target date based on vehicle status
+    // Calculate target date based on rehearsal status
     let targetDate;
+    let appliedRule;
+    
     if (vehicleStatus === REHEARSAL_LABEL) {
       // Rehearsal: copy date as-is
       targetDate = sourceDate;
-      console.log(`🎭 Vehicle is "${REHEARSAL_LABEL}" - copying date as-is`);
+      appliedRule = 'copy-as-is';
+      console.log(`🎭 Status is "${REHEARSAL_LABEL}" - copying date as-is`);
     } else {
-      // Not rehearsal: subtract one day
+      // Not rehearsal (blank or anything else): subtract one day
       targetDate = subtractOneDay(sourceDate);
-      console.log(`📆 Vehicle is "${vehicleStatus || '(empty)'}" - subtracting one day`);
+      appliedRule = 'minus-one-day';
+      console.log(`📆 Status is "${vehicleStatus || '(blank)'}" - subtracting one day`);
     }
 
     console.log(`✏️ Target date to write: ${targetDate}`);
+
+    // Check current target date to avoid unnecessary updates
+    const currentTargetDate = getColumnValue(itemData.column_values, TARGET_DATE_COLUMN);
+    
+    if (currentTargetDate === targetDate) {
+      console.log('✓ Target date already correct - no update needed');
+      return {
+        statusCode: 200,
+        headers,
+        body: JSON.stringify({
+          success: true,
+          message: 'No update needed - date already correct',
+          itemId,
+          sourceDate,
+          targetDate,
+          vehicleStatus: vehicleStatus || '(blank)',
+          appliedRule
+        })
+      };
+    }
 
     // Update the target column
     await updateDateColumn(itemId, TARGET_DATE_COLUMN, targetDate);
@@ -158,8 +200,10 @@ exports.handler = async (event) => {
         itemId,
         sourceDate,
         targetDate,
-        vehicleStatus: vehicleStatus || '(empty)',
-        appliedRule: vehicleStatus === REHEARSAL_LABEL ? 'copy-as-is' : 'minus-one-day'
+        previousTargetDate: currentTargetDate || '(not set)',
+        vehicleStatus: vehicleStatus || '(blank)',
+        appliedRule,
+        triggeredBy: columnId === SOURCE_DATE_COLUMN ? 'date-change' : 'status-change'
       })
     };
 
@@ -263,14 +307,13 @@ async function callMondayAPI(query) {
 // ============================================================================
 
 /**
- * Get the text value from a column by ID
+ * Get the date value from a column by ID
  */
 function getColumnValue(columnValues, columnId) {
   const column = columnValues.find(col => col.id === columnId);
   if (!column) return null;
   
-  // For date columns, the text is usually the formatted date
-  // but we need the raw YYYY-MM-DD format from the value
+  // For date columns, extract the YYYY-MM-DD from the value JSON
   if (column.value) {
     try {
       const parsed = JSON.parse(column.value);
