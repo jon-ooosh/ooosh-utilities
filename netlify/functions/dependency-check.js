@@ -319,6 +319,7 @@ async function scanForApiVersions(repoConfig, apiVersions) {
     // We'll check common locations: netlify/functions/, src/, and root
     const pathsToCheck = [
       'netlify/functions',
+      'functions',
       'src',
       'pages/api',
       'app/api'

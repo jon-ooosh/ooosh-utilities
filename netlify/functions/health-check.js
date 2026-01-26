@@ -145,7 +145,7 @@ async function checkMondayAPI() {
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${token}`,
-        'API-Version': '2024-10'
+        'API-Version': '2025-04'
       },
       body: JSON.stringify({ query }),
       signal: controller.signal
