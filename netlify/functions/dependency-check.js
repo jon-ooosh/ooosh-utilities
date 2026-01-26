@@ -11,12 +11,13 @@
  * - Node.js version EOL status
  * - npm package versions (outdated, major updates)
  * - npm security advisories
- * - Monday.com API version status
- * - Anthropic API version status
+ * - Monday.com API version (scans actual code)
+ * - Anthropic API version (scans actual code)
  * 
  * Returns JSON report and can send email summary.
  * 
  * v1.0 - Initial implementation
+ * v1.1 - Added actual code scanning for API versions, self-monitoring
  */
 
 const nodemailer = require('nodemailer');
@@ -28,12 +29,12 @@ const nodemailer = require('nodemailer');
 const REPOS_TO_MONITOR = [
   {
     name: 'Driver Verification',
-    repo: 'ooosh-driver-verification',
+    repo: 'ooosh-driver-verification-',  // Note: has trailing dash
     description: 'Main driver verification system'
   },
   {
     name: 'Payment Portal', 
-    repo: 'netlify-functions',  // Can update this if you rename it
+    repo: 'netlify-functions',
     description: 'Customer payment portal'
   },
   {
@@ -50,8 +51,25 @@ const REPOS_TO_MONITOR = [
     name: 'HireHop Stock',
     repo: 'alternative-hirehop-stock',
     description: 'Alternative stock management'
+  },
+  {
+    name: 'Utilities (this system)',
+    repo: 'ooosh-utilities',
+    description: 'Monitoring and automation hub'
   }
 ];
+
+// Monday.com API version sunset dates (from their documentation)
+// https://developer.monday.com/api-reference/docs/api-versioning
+const MONDAY_API_VERSIONS = {
+  '2023-10': { status: 'deprecated', sunset: '2024-10-14' },
+  '2024-01': { status: 'deprecated', sunset: '2025-04-14' },
+  '2024-04': { status: 'active', sunset: '2025-07-14' },
+  '2024-07': { status: 'active', sunset: '2025-10-13' },
+  '2024-10': { status: 'active', sunset: '2026-01-12' },
+  '2025-01': { status: 'current', sunset: '2026-04-13' },
+  '2025-04': { status: 'current', sunset: '2026-07-13' }
+};
 
 // Standing advisories (manual notes about known issues)
 const STANDING_ADVISORIES = [
@@ -62,17 +80,6 @@ const STANDING_ADVISORIES = [
     link: 'https://react.dev/learn/start-a-new-react-project'
   }
 ];
-
-// Monday.com API version tracking
-const MONDAY_API_INFO = {
-  currentRecommended: '2024-10',
-  knownVersions: {
-    '2024-01': { status: 'deprecated', sunset: '2025-04-14' },
-    '2024-04': { status: 'active', sunset: '2025-07-14' },
-    '2024-07': { status: 'active', sunset: '2025-10-13' },
-    '2024-10': { status: 'current', sunset: '2026-01-12' }
-  }
-};
 
 // ============================================================================
 // MAIN HANDLER
@@ -104,7 +111,10 @@ exports.handler = async (event) => {
       overall: 'healthy',
       nodeJs: await checkNodeJsStatus(),
       repos: [],
-      sharedServices: checkSharedServices(),
+      apiVersions: {
+        monday: { found: [], status: 'healthy', message: '' },
+        anthropic: { found: [], status: 'healthy', message: '' }
+      },
       standingAdvisories: STANDING_ADVISORIES,
       recommendations: [],
       checkDurationMs: 0
@@ -115,7 +125,13 @@ exports.handler = async (event) => {
       console.log(`📂 Checking ${repoConfig.name}...`);
       const repoReport = await checkRepository(repoConfig);
       report.repos.push(repoReport);
+      
+      // Also scan for API versions in this repo
+      await scanForApiVersions(repoConfig, report.apiVersions);
     }
+
+    // Analyze API version findings
+    analyzeApiVersions(report.apiVersions);
 
     // Compile recommendations
     report.recommendations = compileRecommendations(report);
@@ -227,7 +243,7 @@ async function checkRepository(repoConfig) {
 
   try {
     // Fetch package.json from GitHub
-    const packageJson = await fetchPackageJson(repoConfig.repo);
+    const packageJson = await fetchFileFromGitHub(repoConfig.repo, 'package.json');
     
     if (!packageJson) {
       result.status = 'error';
@@ -235,21 +251,25 @@ async function checkRepository(repoConfig) {
       return result;
     }
 
+    let parsed;
+    try {
+      parsed = JSON.parse(packageJson);
+    } catch (e) {
+      result.status = 'error';
+      result.errors.push('Could not parse package.json');
+      return result;
+    }
+
     result.packageJson = {
-      name: packageJson.name,
-      version: packageJson.version
+      name: parsed.name,
+      version: parsed.version
     };
 
     // Check dependencies
-    const allDeps = {
-      ...packageJson.dependencies,
-      ...packageJson.devDependencies
-    };
-
-    result.packages.total = Object.keys(allDeps).length;
+    result.packages.total = Object.keys(parsed.dependencies || {}).length;
 
     // Check each package
-    for (const [pkg, version] of Object.entries(packageJson.dependencies || {})) {
+    for (const [pkg, version] of Object.entries(parsed.dependencies || {})) {
       const pkgStatus = await checkPackageVersion(pkg, version);
       
       if (pkgStatus.updateType === 'major') {
@@ -285,10 +305,159 @@ async function checkRepository(repoConfig) {
 }
 
 // ============================================================================
+// API VERSION SCANNING
+// ============================================================================
+
+async function scanForApiVersions(repoConfig, apiVersions) {
+  const owner = process.env.GITHUB_OWNER || 'jon-ooosh';
+  const token = process.env.GITHUB_TOKEN;
+  
+  if (!token) return;
+
+  try {
+    // Search for files that might contain API version headers
+    // We'll check common locations: netlify/functions/, src/, and root
+    const pathsToCheck = [
+      'netlify/functions',
+      'src',
+      'pages/api',
+      'app/api'
+    ];
+
+    for (const path of pathsToCheck) {
+      const files = await listFilesInPath(repoConfig.repo, path);
+      
+      for (const file of files) {
+        if (file.endsWith('.js') || file.endsWith('.ts')) {
+          const content = await fetchFileFromGitHub(repoConfig.repo, file);
+          if (content) {
+            // Search for Monday.com API version
+            const mondayMatches = content.match(/['"]API-Version['"]:\s*['"](\d{4}-\d{2})['"]/g);
+            if (mondayMatches) {
+              mondayMatches.forEach(match => {
+                const version = match.match(/(\d{4}-\d{2})/)[1];
+                apiVersions.monday.found.push({
+                  repo: repoConfig.name,
+                  file: file,
+                  version: version
+                });
+              });
+            }
+            
+            // Search for Anthropic API version
+            const anthropicMatches = content.match(/['"]anthropic-version['"]:\s*['"]([^'"]+)['"]/g);
+            if (anthropicMatches) {
+              anthropicMatches.forEach(match => {
+                const version = match.match(/['"]anthropic-version['"]:\s*['"]([^'"]+)['"]/)[1];
+                apiVersions.anthropic.found.push({
+                  repo: repoConfig.name,
+                  file: file,
+                  version: version
+                });
+              });
+            }
+          }
+        }
+      }
+    }
+  } catch (error) {
+    console.log(`Could not scan ${repoConfig.repo} for API versions: ${error.message}`);
+  }
+}
+
+async function listFilesInPath(repo, path) {
+  const owner = process.env.GITHUB_OWNER || 'jon-ooosh';
+  const token = process.env.GITHUB_TOKEN;
+  
+  if (!token) return [];
+
+  try {
+    const url = `https://api.github.com/repos/${owner}/${repo}/contents/${path}`;
+    const response = await fetch(url, {
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Accept': 'application/vnd.github.v3+json',
+        'User-Agent': 'OOOSH-Dependency-Monitor'
+      }
+    });
+
+    if (!response.ok) return [];
+
+    const contents = await response.json();
+    
+    if (!Array.isArray(contents)) return [];
+
+    const files = [];
+    for (const item of contents) {
+      if (item.type === 'file') {
+        files.push(item.path);
+      } else if (item.type === 'dir') {
+        // Recurse one level deep
+        const subFiles = await listFilesInPath(repo, item.path);
+        files.push(...subFiles);
+      }
+    }
+    
+    return files;
+  } catch (error) {
+    return [];
+  }
+}
+
+function analyzeApiVersions(apiVersions) {
+  const now = new Date();
+  const twoMonths = 60 * 24 * 60 * 60 * 1000;
+
+  // Analyze Monday.com versions
+  if (apiVersions.monday.found.length > 0) {
+    // Dedupe versions
+    const uniqueVersions = [...new Set(apiVersions.monday.found.map(f => f.version))];
+    
+    const issues = [];
+    for (const version of uniqueVersions) {
+      const versionInfo = MONDAY_API_VERSIONS[version];
+      
+      if (!versionInfo) {
+        issues.push(`Unknown version ${version} found`);
+        continue;
+      }
+      
+      const sunsetDate = new Date(versionInfo.sunset);
+      
+      if (sunsetDate < now) {
+        apiVersions.monday.status = 'critical';
+        issues.push(`Version ${version} sunset has PASSED (${versionInfo.sunset})`);
+      } else if (sunsetDate - now < twoMonths) {
+        if (apiVersions.monday.status !== 'critical') {
+          apiVersions.monday.status = 'warning';
+        }
+        issues.push(`Version ${version} sunset approaching: ${versionInfo.sunset}`);
+      }
+    }
+    
+    if (issues.length > 0) {
+      apiVersions.monday.message = issues.join('; ');
+    } else {
+      apiVersions.monday.message = `Using version(s): ${uniqueVersions.join(', ')} - all OK`;
+    }
+  } else {
+    apiVersions.monday.message = 'No Monday.com API usage detected';
+  }
+
+  // Anthropic API is stable, just report what we found
+  if (apiVersions.anthropic.found.length > 0) {
+    const uniqueVersions = [...new Set(apiVersions.anthropic.found.map(f => f.version))];
+    apiVersions.anthropic.message = `Using version(s): ${uniqueVersions.join(', ')}`;
+  } else {
+    apiVersions.anthropic.message = 'No Anthropic API usage detected';
+  }
+}
+
+// ============================================================================
 // GITHUB API
 // ============================================================================
 
-async function fetchPackageJson(repoName) {
+async function fetchFileFromGitHub(repoName, filePath) {
   const token = process.env.GITHUB_TOKEN;
   const owner = process.env.GITHUB_OWNER || 'jon-ooosh';
 
@@ -298,7 +467,7 @@ async function fetchPackageJson(repoName) {
   }
 
   try {
-    const url = `https://api.github.com/repos/${owner}/${repoName}/contents/package.json`;
+    const url = `https://api.github.com/repos/${owner}/${repoName}/contents/${filePath}`;
     
     const response = await fetch(url, {
       headers: {
@@ -309,7 +478,6 @@ async function fetchPackageJson(repoName) {
     });
 
     if (!response.ok) {
-      console.error(`Failed to fetch package.json from ${repoName}: ${response.status}`);
       return null;
     }
 
@@ -317,10 +485,10 @@ async function fetchPackageJson(repoName) {
     
     // GitHub returns base64 encoded content
     const content = Buffer.from(data.content, 'base64').toString('utf8');
-    return JSON.parse(content);
+    return content;
 
   } catch (error) {
-    console.error(`Error fetching package.json from ${repoName}:`, error.message);
+    console.error(`Error fetching ${filePath} from ${repoName}:`, error.message);
     return null;
   }
 }
@@ -378,55 +546,6 @@ function parseVersion(versionStr) {
 }
 
 // ============================================================================
-// SHARED SERVICES CHECK
-// ============================================================================
-
-function checkSharedServices() {
-  const services = [];
-
-  // Monday.com API
-  const mondayService = {
-    name: 'Monday.com API',
-    currentVersion: MONDAY_API_INFO.currentRecommended,
-    status: 'healthy',
-    message: ''
-  };
-
-  const versionInfo = MONDAY_API_INFO.knownVersions[MONDAY_API_INFO.currentRecommended];
-  if (versionInfo) {
-    const sunsetDate = new Date(versionInfo.sunset);
-    const now = new Date();
-    const twoMonths = 60 * 24 * 60 * 60 * 1000;
-
-    if (sunsetDate - now < twoMonths) {
-      mondayService.status = 'warning';
-      mondayService.message = `Version ${MONDAY_API_INFO.currentRecommended} sunset: ${versionInfo.sunset}. Check for newer version.`;
-    } else {
-      mondayService.message = `Version ${MONDAY_API_INFO.currentRecommended} active until ${versionInfo.sunset}`;
-    }
-  }
-  services.push(mondayService);
-
-  // Anthropic API
-  services.push({
-    name: 'Anthropic API',
-    currentVersion: '2023-06-01',
-    status: 'healthy',
-    message: 'Stable version, no known deprecation'
-  });
-
-  // Idenfy
-  services.push({
-    name: 'Idenfy API',
-    currentVersion: 'v2',
-    status: 'healthy',
-    message: 'No known deprecation'
-  });
-
-  return services;
-}
-
-// ============================================================================
 // COMPILE RECOMMENDATIONS
 // ============================================================================
 
@@ -443,6 +562,19 @@ function compileRecommendations(report) {
     recommendations.push({
       priority: 'high',
       action: `Plan Node.js upgrade - EOL approaching: ${report.nodeJs.eolDate}`
+    });
+  }
+
+  // Monday.com API version recommendations
+  if (report.apiVersions.monday.status === 'critical') {
+    recommendations.push({
+      priority: 'critical',
+      action: `Monday.com API: ${report.apiVersions.monday.message}`
+    });
+  } else if (report.apiVersions.monday.status === 'warning') {
+    recommendations.push({
+      priority: 'high',
+      action: `Monday.com API: ${report.apiVersions.monday.message}`
     });
   }
 
@@ -471,16 +603,6 @@ function compileRecommendations(report) {
     }
   }
 
-  // Monday.com API
-  for (const service of report.sharedServices) {
-    if (service.status === 'warning') {
-      recommendations.push({
-        priority: 'high',
-        action: service.message
-      });
-    }
-  }
-
   // If nothing to recommend
   if (recommendations.length === 0) {
     recommendations.push({
@@ -497,22 +619,20 @@ function compileRecommendations(report) {
 // ============================================================================
 
 function determineOverallStatus(report) {
-  // Critical if any security issues or Node.js EOL
+  // Critical if any security issues, Node.js EOL, or API version expired
   if (report.nodeJs.status === 'critical') return 'critical';
+  if (report.apiVersions.monday.status === 'critical') return 'critical';
   
   for (const repo of report.repos) {
     if (repo.packages.securityIssues > 0) return 'critical';
   }
 
-  // Warning if Node.js EOL approaching or major updates available
+  // Warning if approaching issues
   if (report.nodeJs.status === 'warning') return 'warning';
+  if (report.apiVersions.monday.status === 'warning') return 'warning';
   
   for (const repo of report.repos) {
     if (repo.packages.majorUpdates > 0) return 'warning';
-  }
-
-  for (const service of report.sharedServices) {
-    if (service.status === 'warning') return 'warning';
   }
 
   return 'healthy';
@@ -562,11 +682,34 @@ async function sendReportEmail(report) {
 
         <!-- Node.js Status -->
         <div style="background: white; padding: 15px; border-radius: 8px; margin-bottom: 15px;">
-          <h3 style="margin-top: 0;">🟢 Node.js Runtime</h3>
+          <h3 style="margin-top: 0;">🖥️ Node.js Runtime</h3>
           <table style="width: 100%; border-collapse: collapse;">
             <tr><td style="padding: 5px 0;">Current Version:</td><td>${report.nodeJs.currentVersion}</td></tr>
             <tr><td style="padding: 5px 0;">Status:</td><td>${statusEmoji[report.nodeJs.status]} ${report.nodeJs.message}</td></tr>
           </table>
+        </div>
+
+        <!-- API Versions -->
+        <div style="background: white; padding: 15px; border-radius: 8px; margin-bottom: 15px;">
+          <h3 style="margin-top: 0;">🔌 API Versions (scanned from code)</h3>
+          <table style="width: 100%; border-collapse: collapse;">
+            <tr>
+              <td style="padding: 8px 0;"><strong>Monday.com:</strong></td>
+              <td>${statusEmoji[report.apiVersions.monday.status]} ${report.apiVersions.monday.message}</td>
+            </tr>
+            <tr>
+              <td style="padding: 8px 0;"><strong>Anthropic:</strong></td>
+              <td>${statusEmoji[report.apiVersions.anthropic.status]} ${report.apiVersions.anthropic.message}</td>
+            </tr>
+          </table>
+          ${report.apiVersions.monday.found.length > 0 ? `
+          <details style="margin-top: 10px;">
+            <summary style="cursor: pointer; color: #6b7280;">Show files using Monday.com API</summary>
+            <ul style="font-size: 12px; color: #6b7280;">
+              ${report.apiVersions.monday.found.map(f => `<li>${f.repo}: ${f.file} (v${f.version})</li>`).join('')}
+            </ul>
+          </details>
+          ` : ''}
         </div>
 
         <!-- Repositories -->
@@ -604,26 +747,6 @@ async function sendReportEmail(report) {
           </table>
         </div>
 
-        <!-- Shared Services -->
-        <div style="background: white; padding: 15px; border-radius: 8px; margin-bottom: 15px;">
-          <h3 style="margin-top: 0;">🌐 Shared Services</h3>
-          <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
-  `;
-
-  for (const service of report.sharedServices) {
-    html += `
-      <tr>
-        <td style="padding: 8px 0;">${service.name}</td>
-        <td style="padding: 8px 0;">${service.message}</td>
-        <td style="padding: 8px 0;">${statusEmoji[service.status]}</td>
-      </tr>
-    `;
-  }
-
-  html += `
-          </table>
-        </div>
-
         <!-- Standing Advisories -->
         <div style="background: white; padding: 15px; border-radius: 8px; margin-bottom: 15px;">
           <h3 style="margin-top: 0;">📋 Standing Advisories</h3>
@@ -650,9 +773,12 @@ async function sendReportEmail(report) {
     const recColor = rec.priority === 'critical' ? '#fef2f2' : 
                      rec.priority === 'high' ? '#fffbeb' : 
                      rec.priority === 'medium' ? '#f0fdf4' : '#f9fafb';
+    const priorityBadge = rec.priority !== 'none' ? 
+      `<span style="background: ${rec.priority === 'critical' ? '#ef4444' : rec.priority === 'high' ? '#f59e0b' : '#22c55e'}; color: white; padding: 2px 6px; border-radius: 4px; font-size: 11px; margin-right: 8px;">${rec.priority.toUpperCase()}</span>` : '';
+    
     html += `
       <div style="padding: 10px; background: ${recColor}; border-radius: 4px; margin-bottom: 10px;">
-        ${rec.action}
+        ${priorityBadge}${rec.action}
       </div>
     `;
   }
@@ -662,7 +788,7 @@ async function sendReportEmail(report) {
       </div>
       
       <div style="padding: 20px; text-align: center; color: #6b7280; font-size: 12px;">
-        Generated by OOOSH Utilities Monitor<br>
+        Generated by OOOSH Utilities Monitor v1.1<br>
         Check took ${report.checkDurationMs}ms
       </div>
     </div>
