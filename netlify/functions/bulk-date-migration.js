@@ -8,23 +8,26 @@
  * - If "Rehearsal" → copy date as-is
  * - Otherwise → copy date PLUS one day
  * 
- * CHUNKED APPROACH: Processes 200 items per run to avoid Netlify's 60s timeout.
- * Run multiple times until it reports "COMPLETE".
+ * TIME-AWARE: Monitors elapsed time and stops gracefully before the 60s 
+ * Netlify timeout, ensuring it always returns a valid cursor to continue.
  * 
  * USAGE:
  * - Dry run (preview only): 
  *   https://ooosh-utilities.netlify.app/.netlify/functions/bulk-date-migration
  * 
- * - Execute one chunk:
+ * - Execute:
  *   https://ooosh-utilities.netlify.app/.netlify/functions/bulk-date-migration?execute=true
  * 
- * - Continue from specific cursor (auto-provided in response):
+ * - Continue from cursor (auto-provided in response):
  *   https://ooosh-utilities.netlify.app/.netlify/functions/bulk-date-migration?execute=true&cursor=XXXXX
+ * 
+ * IMPORTANT: Wait for each run to complete before starting the next!
  * 
  * DELETE THIS FUNCTION AFTER USE - it's not needed ongoing.
  * 
  * v1.0 - Initial implementation
  * v1.1 - Chunked approach to handle large boards
+ * v1.2 - Time-aware processing to avoid timeouts
  */
 
 // Board configuration
@@ -34,12 +37,13 @@ const TARGET_DATE_COLUMN = 'date_mkzzmse7';        // Where we're copying TO
 const VEHICLE_STATUS_COLUMN = 'dup__of_vehicle_';  // Rehearsal status
 const REHEARSAL_LABEL = 'Rehearsal';
 
-// Chunking configuration - keep well under 60s timeout
-const ITEMS_PER_FETCH = 200;     // Items to fetch from Monday.com per run
-const DELAY_BETWEEN_UPDATES = 100;  // 100ms between updates (rate limiting)
+// Time management - stop before Netlify's 60s timeout
+const MAX_EXECUTION_MS = 50000;  // Stop after 50 seconds to leave buffer
+const ITEMS_PER_FETCH = 100;     // Fetch 100 items at a time
+const DELAY_BETWEEN_UPDATES = 50; // 50ms between updates
 
 exports.handler = async (event) => {
-  console.log('🔄 Bulk date migration initiated (chunked mode)');
+  console.log('🔄 Bulk date migration initiated (time-aware mode)');
   const startTime = Date.now();
   
   const headers = {
@@ -56,159 +60,157 @@ exports.handler = async (event) => {
   // Check parameters
   const params = event.queryStringParameters || {};
   const executeForReal = params.execute === 'true';
-  const startCursor = params.cursor || null;  // Resume from this cursor
+  const startCursor = params.cursor || null;
+
+  // Helper to check if we're running low on time
+  const isTimeRunningOut = () => (Date.now() - startTime) > MAX_EXECUTION_MS;
+  const getElapsed = () => Date.now() - startTime;
 
   try {
-    // Step 1: Fetch ONE chunk of items
-    console.log(`📋 Fetching up to ${ITEMS_PER_FETCH} items...`);
-    const { items, nextCursor } = await fetchItemsChunk(startCursor);
-    console.log(`📊 Fetched ${items.length} items`);
-
-    // Step 2: Analyze this chunk
-    const analysis = {
-      itemsFetched: items.length,
-      itemsWithSourceDate: 0,
-      itemsNeedingUpdate: 0,
-      itemsAlreadyCorrect: 0,
-      itemsSkipped: 0,
-      rehearsals: 0,
-      nonRehearsals: 0,
-      updates: [],
-      skipped: []
+    // Track overall progress
+    const progress = {
+      itemsFetched: 0,
+      itemsAnalyzed: 0,
+      updatesNeeded: 0,
+      updatesCompleted: 0,
+      updatesFailed: 0,
+      alreadyCorrect: 0,
+      skipped: 0,
+      stoppedEarly: false,
+      failures: []
     };
 
-    for (const item of items) {
-      const sourceDate = getColumnValue(item.column_values, SOURCE_DATE_COLUMN);
-      const currentTargetDate = getColumnValue(item.column_values, TARGET_DATE_COLUMN);
-      const vehicleStatus = getStatusLabel(item.column_values, VEHICLE_STATUS_COLUMN);
-      const isRehearsal = vehicleStatus === REHEARSAL_LABEL;
+    let currentCursor = startCursor;
+    let lastProcessedCursor = startCursor;
 
-      // Skip if no source date
-      if (!sourceDate) {
-        analysis.skipped.push({
-          itemId: item.id,
-          name: item.name,
-          reason: 'No source date set'
-        });
-        analysis.itemsSkipped++;
-        continue;
+    // Keep fetching and processing until time runs out or no more items
+    while (!isTimeRunningOut()) {
+      console.log(`📋 Fetching items... (elapsed: ${getElapsed()}ms)`);
+      
+      const { items, nextCursor } = await fetchItemsChunk(currentCursor);
+      progress.itemsFetched += items.length;
+      
+      console.log(`📊 Fetched ${items.length} items`);
+
+      if (items.length === 0) {
+        // No more items - we're done!
+        console.log('✅ No more items to process - migration complete!');
+        break;
       }
 
-      analysis.itemsWithSourceDate++;
-
-      // Calculate what the target date should be
-      let calculatedTargetDate;
-      if (isRehearsal) {
-        calculatedTargetDate = sourceDate;
-        analysis.rehearsals++;
-      } else {
-        calculatedTargetDate = addOneDay(sourceDate);
-        analysis.nonRehearsals++;
-      }
-
-      // Check if update is needed
-      if (currentTargetDate === calculatedTargetDate) {
-        analysis.itemsAlreadyCorrect++;
-        continue;
-      }
-
-      // Record the update needed
-      analysis.itemsNeedingUpdate++;
-      analysis.updates.push({
-        itemId: item.id,
-        name: item.name,
-        sourceDate,
-        currentTargetDate: currentTargetDate || '(empty)',
-        newTargetDate: calculatedTargetDate,
-        isRehearsal,
-        rule: isRehearsal ? 'copy-as-is' : 'plus-one-day'
-      });
-    }
-
-    // Step 3: If dry run, just return analysis
-    if (!executeForReal) {
-      return {
-        statusCode: 200,
-        headers,
-        body: JSON.stringify({
-          mode: 'DRY RUN - No changes made',
-          instruction: 'Add ?execute=true to URL to run this chunk',
-          chunk: {
-            itemsFetched: analysis.itemsFetched,
-            itemsNeedingUpdate: analysis.itemsNeedingUpdate,
-            itemsAlreadyCorrect: analysis.itemsAlreadyCorrect,
-            itemsSkipped: analysis.itemsSkipped,
-            hasMoreItems: !!nextCursor
-          },
-          updatePreview: analysis.updates.slice(0, 20),
-          nextCursor: nextCursor || null,
-          nextUrl: nextCursor 
-            ? `?execute=true&cursor=${encodeURIComponent(nextCursor)}`
-            : null
-        }, null, 2)
-      };
-    }
-
-    // Step 4: Execute updates for this chunk
-    console.log(`🚀 Executing ${analysis.updates.length} updates...`);
-    
-    let successCount = 0;
-    let failCount = 0;
-    const failures = [];
-
-    for (const update of analysis.updates) {
-      try {
-        await updateDateColumn(update.itemId, TARGET_DATE_COLUMN, update.newTargetDate);
-        successCount++;
-        console.log(`  ✅ ${update.itemId}: ${update.sourceDate} → ${update.newTargetDate}`);
-        
-        // Small delay between updates
-        if (analysis.updates.indexOf(update) < analysis.updates.length - 1) {
-          await sleep(DELAY_BETWEEN_UPDATES);
+      // Process this batch
+      for (const item of items) {
+        // Check time before each item
+        if (isTimeRunningOut()) {
+          console.log(`⏰ Time limit approaching - stopping gracefully (elapsed: ${getElapsed()}ms)`);
+          progress.stoppedEarly = true;
+          break;
         }
-      } catch (error) {
-        failCount++;
-        failures.push({ itemId: update.itemId, name: update.name, error: error.message });
-        console.log(`  ❌ ${update.itemId}: ${error.message}`);
+
+        progress.itemsAnalyzed++;
+
+        const sourceDate = getColumnValue(item.column_values, SOURCE_DATE_COLUMN);
+        const currentTargetDate = getColumnValue(item.column_values, TARGET_DATE_COLUMN);
+        const vehicleStatus = getStatusLabel(item.column_values, VEHICLE_STATUS_COLUMN);
+        const isRehearsal = vehicleStatus === REHEARSAL_LABEL;
+
+        // Skip if no source date
+        if (!sourceDate) {
+          progress.skipped++;
+          continue;
+        }
+
+        // Calculate target date
+        const calculatedTargetDate = isRehearsal ? sourceDate : addOneDay(sourceDate);
+
+        // Skip if already correct
+        if (currentTargetDate === calculatedTargetDate) {
+          progress.alreadyCorrect++;
+          continue;
+        }
+
+        progress.updatesNeeded++;
+
+        // If dry run, don't actually update
+        if (!executeForReal) {
+          continue;
+        }
+
+        // Perform the update
+        try {
+          await updateDateColumn(item.id, TARGET_DATE_COLUMN, calculatedTargetDate);
+          progress.updatesCompleted++;
+          console.log(`  ✅ ${item.id}: ${sourceDate} → ${calculatedTargetDate}`);
+          
+          // Small delay between updates
+          await sleep(DELAY_BETWEEN_UPDATES);
+        } catch (error) {
+          progress.updatesFailed++;
+          progress.failures.push({ itemId: item.id, name: item.name, error: error.message });
+          console.log(`  ❌ ${item.id}: ${error.message}`);
+        }
       }
+
+      // If we stopped early due to time, don't move to next cursor
+      if (progress.stoppedEarly) {
+        break;
+      }
+
+      // Move to next page
+      lastProcessedCursor = nextCursor;
+      currentCursor = nextCursor;
+
+      // If no more pages, we're done
+      if (!nextCursor) {
+        console.log('✅ Reached end of items - migration complete!');
+        break;
+      }
+    }
+
+    // Check if we ran out of time before finishing this batch
+    if (isTimeRunningOut() && !progress.stoppedEarly) {
+      progress.stoppedEarly = true;
     }
 
     const duration = Date.now() - startTime;
-    const isComplete = !nextCursor;
+    const isComplete = !progress.stoppedEarly && !lastProcessedCursor;
 
-    console.log(`✅ Chunk complete: ${successCount} updated, ${failCount} failed, ${duration}ms`);
+    console.log(`📊 Run complete: ${progress.updatesCompleted} updated, ${duration}ms elapsed`);
 
-    // Build next URL for convenience
-    const nextUrl = nextCursor 
-      ? `?execute=true&cursor=${encodeURIComponent(nextCursor)}`
-      : null;
+    // Build response
+    const response = {
+      mode: executeForReal ? 'EXECUTED' : 'DRY RUN',
+      status: isComplete 
+        ? '🎉 COMPLETE - All items processed!' 
+        : '⏳ MORE TO DO - Run the nextFullUrl to continue',
+      progress: {
+        itemsFetched: progress.itemsFetched,
+        itemsAnalyzed: progress.itemsAnalyzed,
+        updatesNeeded: progress.updatesNeeded,
+        updatesCompleted: executeForReal ? progress.updatesCompleted : '(dry run)',
+        updatesFailed: progress.updatesFailed,
+        alreadyCorrect: progress.alreadyCorrect,
+        skippedNoDate: progress.skipped,
+        durationMs: duration,
+        stoppedDueToTime: progress.stoppedEarly
+      },
+      isComplete,
+      nextCursor: isComplete ? null : lastProcessedCursor,
+      nextFullUrl: isComplete 
+        ? null 
+        : `https://ooosh-utilities.netlify.app/.netlify/functions/bulk-date-migration?execute=true&cursor=${encodeURIComponent(lastProcessedCursor || '')}`,
+      failures: progress.failures.length > 0 ? progress.failures : undefined,
+      instruction: isComplete 
+        ? 'Migration complete! You can now delete this function from your repo.'
+        : executeForReal
+          ? '👆 Copy the nextFullUrl above and paste it in your browser. WAIT for it to complete before running again!'
+          : 'Add ?execute=true to the URL to run for real.'
+    };
 
     return {
       statusCode: 200,
       headers,
-      body: JSON.stringify({
-        mode: 'EXECUTED',
-        status: isComplete ? '🎉 COMPLETE - All items processed!' : '⏳ MORE TO DO - Run again with cursor',
-        chunk: {
-          itemsFetched: analysis.itemsFetched,
-          updatesAttempted: analysis.updates.length,
-          successful: successCount,
-          failed: failCount,
-          alreadyCorrect: analysis.itemsAlreadyCorrect,
-          skipped: analysis.itemsSkipped,
-          durationMs: duration
-        },
-        hasMoreItems: !isComplete,
-        nextCursor: nextCursor || null,
-        nextUrl: nextUrl,
-        nextFullUrl: nextUrl 
-          ? `https://ooosh-utilities.netlify.app/.netlify/functions/bulk-date-migration${nextUrl}`
-          : null,
-        failures: failures.length > 0 ? failures : undefined,
-        instruction: isComplete 
-          ? 'Migration complete! You can now delete this function.'
-          : 'Copy the nextFullUrl and paste it in your browser to continue.'
-      }, null, 2)
+      body: JSON.stringify(response, null, 2)
     };
 
   } catch (error) {
@@ -218,7 +220,8 @@ exports.handler = async (event) => {
       headers,
       body: JSON.stringify({ 
         error: error.message,
-        tip: 'If this keeps happening, try again - might be a temporary Monday.com issue'
+        elapsed: Date.now() - startTime,
+        tip: 'Try running again - might be a temporary Monday.com issue'
       })
     };
   }
@@ -228,14 +231,10 @@ exports.handler = async (event) => {
 // MONDAY.COM API HELPERS
 // ============================================================================
 
-/**
- * Fetch a chunk of items from the board
- */
 async function fetchItemsChunk(cursor) {
   let query;
   
   if (cursor) {
-    // Continue from cursor
     query = `query {
       next_items_page(cursor: "${cursor}", limit: ${ITEMS_PER_FETCH}) {
         cursor
@@ -251,7 +250,6 @@ async function fetchItemsChunk(cursor) {
       }
     }`;
   } else {
-    // First page
     query = `query {
       boards(ids: [${BOARD_ID}]) {
         items_page(limit: ${ITEMS_PER_FETCH}) {
@@ -285,9 +283,6 @@ async function fetchItemsChunk(cursor) {
   }
 }
 
-/**
- * Update a date column on an item
- */
 async function updateDateColumn(itemId, columnId, dateValue) {
   const columnValues = {
     [columnId]: { date: dateValue }
@@ -308,9 +303,6 @@ async function updateDateColumn(itemId, columnId, dateValue) {
   return await callMondayAPI(mutation);
 }
 
-/**
- * Make a call to Monday.com GraphQL API
- */
 async function callMondayAPI(query) {
   const token = process.env.MONDAY_API_TOKEN;
   
