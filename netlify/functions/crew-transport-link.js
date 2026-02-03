@@ -16,7 +16,7 @@
  * 
  * OUTPUTS:
  * 1. link_mm07k8n4: URL to portal with "Transport / crew" display text
- * 2. text_mm07fcs: Job ID as plain text (e.g., "13422")
+ * 2. text7: Job ID as plain text (e.g., "13422")
  * 3. link (source): Same URL but with job ID as display text
  * 
  * LOOP PROTECTION:
@@ -37,7 +37,7 @@
 const BOARD_ID = 2431480012;
 const SOURCE_LINK_COLUMN = 'link';                 // The HireHop link column (input)
 const TARGET_LINK_COLUMN = 'link_mm07k8n4';        // Portal link column (output)
-const TARGET_TEXT_COLUMN = 'text_mm07fcs';         // Job ID text column (output)
+const TARGET_TEXT_COLUMN = 'text7';         // Job ID text column (output)
 const DISPLAY_TEXT = 'Transport / crew';           // What the portal link shows as
 const PORTAL_BASE_URL = 'https://ooosh-freelancer-portal.netlify.app/staff/crew-transport?job=';
 
