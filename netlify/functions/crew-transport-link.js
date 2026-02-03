@@ -3,19 +3,25 @@
  * 
  * Webhook handler for Monday.com board 2431480012.
  * When the "link" column is populated with a HireHop job URL, this extracts
- * the job number and creates a nicely-formatted link to the Freelancer Portal
- * crew/transport quote page.
+ * the job number and:
+ * 1. Creates a nicely-formatted link to the Freelancer Portal crew/transport page
+ * 2. Writes the job ID to a text column
+ * 3. Updates the source link's display text to show the job ID
  * 
  * TRIGGER:
- * When "link" column changes → extract job ID → write formatted link
+ * When "link" column changes → extract job ID → update three columns
  * 
  * INPUT EXAMPLE:
  * https://myhirehop.com/job.php?id=13422
  * 
- * OUTPUT:
- * URL: https://ooosh-freelancer-portal.netlify.app/staff/crew-transport?job=13422
- * Display text: "Transport / crew"
- * Written to column: link_mm07k8n4
+ * OUTPUTS:
+ * 1. link_mm07k8n4: URL to portal with "Transport / crew" display text
+ * 2. text_mm07fcs: Job ID as plain text (e.g., "13422")
+ * 3. link (source): Same URL but with job ID as display text
+ * 
+ * LOOP PROTECTION:
+ * Updating the source "link" column triggers another webhook. We prevent
+ * infinite loops by checking if the display text is already set correctly.
  * 
  * Webhook setup in Monday.com:
  * 1. Go to Board > Integrations > Webhooks
@@ -24,13 +30,15 @@
  * 3. URL: https://ooosh-utilities.netlify.app/.netlify/functions/crew-transport-link
  * 
  * v1.0 - Initial implementation
+ * v1.1 - Added text column output and source link display text update
  */
 
 // Board configuration
 const BOARD_ID = 2431480012;
-const SOURCE_LINK_COLUMN = 'link';                 // The HireHop link column
-const TARGET_LINK_COLUMN = 'link_mm07k8n4';        // Where we write the portal link
-const DISPLAY_TEXT = 'Transport / crew';           // What the link shows as
+const SOURCE_LINK_COLUMN = 'link';                 // The HireHop link column (input)
+const TARGET_LINK_COLUMN = 'link_mm07k8n4';        // Portal link column (output)
+const TARGET_TEXT_COLUMN = 'text_mm07fcs';         // Job ID text column (output)
+const DISPLAY_TEXT = 'Transport / crew';           // What the portal link shows as
 const PORTAL_BASE_URL = 'https://ooosh-freelancer-portal.netlify.app/staff/crew-transport?job=';
 
 // Retry configuration (matching other functions in this repo)
@@ -130,9 +138,11 @@ exports.handler = async (event) => {
       };
     }
 
-    // Extract the HireHop link URL
+    // Extract the HireHop link URL and current display text
     const hirehopUrl = getLinkUrl(itemData.column_values, SOURCE_LINK_COLUMN);
+    const currentDisplayText = getLinkDisplayText(itemData.column_values, SOURCE_LINK_COLUMN);
     console.log(`🔗 Source HireHop URL: ${hirehopUrl || '(not set)'}`);
+    console.log(`📝 Current display text: ${currentDisplayText || '(not set)'}`);
 
     // If no URL is set, nothing to do
     if (!hirehopUrl) {
@@ -163,14 +173,36 @@ exports.handler = async (event) => {
 
     console.log(`🔢 Extracted job ID: ${jobId}`);
 
+    // LOOP PROTECTION: Check if display text already matches job ID
+    // If it does, this is likely a secondary webhook trigger from our own update
+    if (currentDisplayText === jobId) {
+      console.log('🔄 Display text already set to job ID - skipping to prevent loop');
+      return {
+        statusCode: 200,
+        headers,
+        body: JSON.stringify({ 
+          message: 'Already processed (display text matches job ID)',
+          jobId,
+          skippedToPreventLoop: true
+        })
+      };
+    }
+
     // Build the portal URL
     const portalUrl = PORTAL_BASE_URL + jobId;
     console.log(`✨ Portal URL: ${portalUrl}`);
 
-    // Update the target link column with URL and display text
-    await updateLinkColumn(itemId, TARGET_LINK_COLUMN, portalUrl, DISPLAY_TEXT);
+    // Update all three columns
+    // 1. Target link column (portal link with "Transport / crew" text)
+    // 2. Text column (just the job ID)
+    // 3. Source link column (same URL but with job ID as display text)
+    await updateMultipleColumns(itemId, {
+      [TARGET_LINK_COLUMN]: { url: portalUrl, text: DISPLAY_TEXT },
+      [TARGET_TEXT_COLUMN]: jobId,
+      [SOURCE_LINK_COLUMN]: { url: hirehopUrl, text: jobId }
+    });
 
-    console.log('✅ Link created successfully');
+    console.log('✅ All columns updated successfully');
     
     return {
       statusCode: 200,
@@ -181,7 +213,11 @@ exports.handler = async (event) => {
         jobId,
         sourceUrl: hirehopUrl,
         portalUrl,
-        displayText: DISPLAY_TEXT
+        updates: {
+          [TARGET_LINK_COLUMN]: `${portalUrl} ("${DISPLAY_TEXT}")`,
+          [TARGET_TEXT_COLUMN]: jobId,
+          [SOURCE_LINK_COLUMN]: `display text set to "${jobId}"`
+        }
       })
     };
 
@@ -227,16 +263,21 @@ async function fetchItemDetails(itemId) {
 }
 
 /**
- * Update a link column with URL and display text
+ * Update multiple columns at once (handles link and text columns)
  */
-async function updateLinkColumn(itemId, columnId, url, displayText) {
-  // Link columns require format: { "url": "...", "text": "..." }
-  const columnValues = {
-    [columnId]: { 
-      url: url,
-      text: displayText
+async function updateMultipleColumns(itemId, columns) {
+  // Build column values object with correct format for each type
+  const columnValues = {};
+  
+  for (const [columnId, value] of Object.entries(columns)) {
+    if (typeof value === 'object' && value.url !== undefined) {
+      // Link column format: { "url": "...", "text": "..." }
+      columnValues[columnId] = { url: value.url, text: value.text };
+    } else {
+      // Text column format: just the string value
+      columnValues[columnId] = value;
     }
-  };
+  }
 
   const mutation = `
     mutation {
@@ -348,6 +389,28 @@ function getLinkUrl(columnValues, columnId) {
   
   // Sometimes the text field has the URL
   return column.text || null;
+}
+
+/**
+ * Get the display text from a link column
+ */
+function getLinkDisplayText(columnValues, columnId) {
+  const column = columnValues.find(col => col.id === columnId);
+  if (!column) return null;
+  
+  // Link columns store the display text in the value JSON
+  if (column.value) {
+    try {
+      const parsed = JSON.parse(column.value);
+      if (parsed.text) {
+        return parsed.text;
+      }
+    } catch (e) {
+      // No display text set
+    }
+  }
+  
+  return null;
 }
 
 /**
