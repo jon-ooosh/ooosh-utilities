@@ -120,21 +120,11 @@ exports.handler = async (event) => {
       };
     }
 
-    // Fetch the Crewed Jobs item to get the connected freelancer ID
-    console.log(`🔍 Fetching item ${itemId} details...`);
-    const itemData = await fetchItemDetails(itemId, CREWED_JOBS_BOARD_ID);
-    
-    if (!itemData) {
-      console.error('❌ Could not fetch item details');
-      return {
-        statusCode: 500,
-        headers,
-        body: JSON.stringify({ error: 'Failed to fetch item details' })
-      };
-    }
-
-    // Extract the connected freelancer item ID(s)
-    const connectedIds = getConnectedItemIds(itemData.column_values, CONNECT_COLUMN);
+    // Extract connected freelancer ID(s) directly from the webhook payload
+    // The webhook value contains linkedPulseIds when a connection exists
+    const webhookValue = webhookEvent.value || {};
+    const linkedPulses = webhookValue.linkedPulseIds || [];
+    const connectedIds = linkedPulses.map(item => item.linkedPulseId);
     console.log(`🔗 Connected freelancer IDs: ${connectedIds.length > 0 ? connectedIds.join(', ') : '(none)'}`);
 
     // If connection was removed (no linked items), clear the email field
@@ -329,30 +319,6 @@ async function callMondayAPI(query) {
 // ============================================================================
 // UTILITY FUNCTIONS
 // ============================================================================
-
-/**
- * Get connected item IDs from a board relation (connect) column
- */
-function getConnectedItemIds(columnValues, columnId) {
-  const column = columnValues.find(col => col.id === columnId);
-  if (!column) return [];
-  
-  // Board relation columns store linked item IDs in the value JSON
-  if (column.value) {
-    try {
-      const parsed = JSON.parse(column.value);
-      
-      // Format: { "linkedPulseIds": [{ "linkedPulseId": 12345 }] }
-      if (parsed.linkedPulseIds && Array.isArray(parsed.linkedPulseIds)) {
-        return parsed.linkedPulseIds.map(item => item.linkedPulseId);
-      }
-    } catch (e) {
-      // Fall back
-    }
-  }
-  
-  return [];
-}
 
 /**
  * Get the email value from an email column
