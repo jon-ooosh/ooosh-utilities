@@ -4,40 +4,37 @@
  * Webhook handler for Monday.com board 2431480012.
  * When the "link" column is populated with a HireHop job URL, this extracts
  * the job number and:
- * 1. Creates a nicely-formatted link to the Freelancer Portal crew/transport page
- * 2. Writes the job ID to a text column
- * 3. Updates the source link's display text to show the job ID
+ * 1. Creates a nicely-formatted portal link in link_mm07k8n4
+ * 2. Writes the job ID to text_mm07fcs (text7) - CRITICAL for other processes
+ * 3. Updates the source link display text to show the job ID
  * 
  * TRIGGER:
- * When "link" column changes → extract job ID → update three columns
+ * When "link" column changes → extract job ID → write to multiple columns
  * 
- * INPUT EXAMPLE: 
+ * INPUT EXAMPLE:
  * https://myhirehop.com/job.php?id=13422
  * 
- * OUTPUTS:
- * 1. link_mm07k8n4: URL to portal with "Transport / crew" display text
- * 2. text7: Job ID as plain text (e.g., "13422")
- * 3. link (source): Same URL but with job ID as display text
+ * OUTPUT:
+ * - link_mm07k8n4: Portal URL with "Transport / crew" display text
+ * - text_mm07fcs: Job ID as plain text (e.g., "13422") - ESSENTIAL for workflows
+ * - link (source): Same URL but with job ID as display text
  * 
  * LOOP PROTECTION:
- * Updating the source "link" column triggers another webhook. We prevent
- * infinite loops by checking if the display text is already set correctly.
- * 
- * Webhook setup in Monday.com:
- * 1. Go to Board > Integrations > Webhooks
- * 2. Create webhook for "When column changes":
- *    - Column = link
- * 3. URL: https://ooosh-utilities.netlify.app/.netlify/functions/crew-transport-link
+ * When we update the source link's display text, it triggers the webhook again.
+ * We skip processing ONLY if both:
+ * - Display text already matches job ID (would trigger loop)
+ * - text7 already has the job ID (no update needed)
  * 
  * v1.0 - Initial implementation
- * v1.1 - Added text column output and source link display text update
+ * v1.1 - Added text column and source link display text updates
+ * v1.2 - Fixed loop protection to check text7, not just display text
  */
 
 // Board configuration
 const BOARD_ID = 2431480012;
-const SOURCE_LINK_COLUMN = 'link';                 // The HireHop link column (input)
-const TARGET_LINK_COLUMN = 'link_mm07k8n4';        // Portal link column (output)
-const TARGET_TEXT_COLUMN = 'text7';         // Job ID text column (output)
+const SOURCE_LINK_COLUMN = 'link';                 // The HireHop link column
+const TARGET_LINK_COLUMN = 'link_mm07k8n4';        // Where we write the portal link
+const TARGET_TEXT_COLUMN = 'text_mm07fcs';         // Where we write the job ID (text7)
 const DISPLAY_TEXT = 'Transport / crew';           // What the portal link shows as
 const PORTAL_BASE_URL = 'https://ooosh-freelancer-portal.netlify.app/staff/crew-transport?job=';
 
@@ -173,16 +170,25 @@ exports.handler = async (event) => {
 
     console.log(`🔢 Extracted job ID: ${jobId}`);
 
-    // LOOP PROTECTION: Check if display text already matches job ID
-    // If it does, this is likely a secondary webhook trigger from our own update
-    if (currentDisplayText === jobId) {
-      console.log('🔄 Display text already set to job ID - skipping to prevent loop');
+    // Get current value of text7 column - this is the CRITICAL column for other processes
+    const currentText7Value = getTextColumnValue(itemData.column_values, TARGET_TEXT_COLUMN);
+    console.log(`📋 Current text7 value: ${currentText7Value || '(empty)'}`);
+
+    // LOOP PROTECTION: Only skip if BOTH conditions are met:
+    // 1. Display text already shows job ID (so updating it would trigger webhook again)
+    // 2. text7 already has the job ID (so we don't need to update it)
+    // 
+    // If text7 is empty or different, we MUST process even if display text is already set!
+    if (currentDisplayText === jobId && currentText7Value === jobId) {
+      console.log('🔄 Both display text AND text7 already set to job ID - skipping to prevent loop');
       return {
         statusCode: 200,
         headers,
         body: JSON.stringify({ 
-          message: 'Already processed (display text matches job ID)',
+          message: 'Already fully processed',
           jobId,
+          displayTextMatches: true,
+          text7Matches: true,
           skippedToPreventLoop: true
         })
       };
@@ -194,7 +200,7 @@ exports.handler = async (event) => {
 
     // Update all three columns
     // 1. Target link column (portal link with "Transport / crew" text)
-    // 2. Text column (just the job ID)
+    // 2. Text column (just the job ID) - CRITICAL for workflows
     // 3. Source link column (same URL but with job ID as display text)
     await updateMultipleColumns(itemId, {
       [TARGET_LINK_COLUMN]: { url: portalUrl, text: DISPLAY_TEXT },
@@ -411,6 +417,17 @@ function getLinkDisplayText(columnValues, columnId) {
   }
   
   return null;
+}
+
+/**
+ * Get the value from a text column
+ */
+function getTextColumnValue(columnValues, columnId) {
+  const column = columnValues.find(col => col.id === columnId);
+  if (!column) return null;
+  
+  // Text columns have the value directly in the text field
+  return column.text || null;
 }
 
 /**
