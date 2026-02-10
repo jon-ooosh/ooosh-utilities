@@ -11,7 +11,7 @@
  * TRIGGER:
  * When "link" column changes → extract job ID → update three columns
  * 
- * INPUT EXAMPLE:
+ * INPUT EXAMPLE: 
  * https://myhirehop.com/job.php?id=13422
  * 
  * OUTPUTS:
