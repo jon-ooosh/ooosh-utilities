@@ -34,7 +34,7 @@
 const BOARD_ID = 2431480012;
 const SOURCE_LINK_COLUMN = 'link';                 // The HireHop link column
 const TARGET_LINK_COLUMN = 'link_mm07k8n4';        // Where we write the portal link
-const TARGET_TEXT_COLUMN = 'text_mm07fcs';         // Where we write the job ID (text7)
+const TARGET_TEXT_COLUMN = 'text7';                // Where we write the job ID (text7)
 const DISPLAY_TEXT = 'Transport / crew';           // What the portal link shows as
 const PORTAL_BASE_URL = 'https://ooosh-freelancer-portal.netlify.app/staff/crew-transport?job=';
 
