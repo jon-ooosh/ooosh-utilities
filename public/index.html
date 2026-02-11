@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OOOSH Staff Hub</title>
+  <link rel="stylesheet" href="/hub.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+  <div class="container">
+    <!-- Login Screen -->
+    <div id="login-screen" class="card">
+      <div class="card-header">
+        <div class="icon-circle">
+          <span class="icon">🔐</span>
+        </div>
+        <h1>Staff Hub</h1>
+        <p class="subtitle">Enter PIN to access staff tools</p>
+      </div>
+      
+      <div class="card-body">
+        <div class="form-group">
+          <label for="pin-input">Staff PIN</label>
+          <input 
+            type="password" 
+            id="pin-input" 
+            placeholder="Enter PIN" 
+            autocomplete="off"
+            maxlength="20"
+          >
+        </div>
+        <button id="login-btn" class="btn btn-primary">
+          Enter Staff Hub
+        </button>
+        <p id="login-error" class="error-message"></p>
+      </div>
+    </div>
+
+    <!-- Hub Screen (hidden until logged in) -->
+    <div id="hub-screen" class="hidden">
+      <!-- Job Info Header -->
+      <div class="job-header card">
+        <div class="job-info">
+          <span class="job-label">Job</span>
+          <span id="job-number" class="job-number">—</span>
+          <span id="job-name" class="job-name"></span>
+        </div>
+        <button id="change-job-btn" class="btn btn-small btn-secondary">Change Job</button>
+      </div>
+
+      <!-- Job Entry (shown if no job specified) -->
+      <div id="job-entry" class="card hidden">
+        <h2>Enter Job Number</h2>
+        <div class="form-group">
+          <input 
+            type="text" 
+            id="job-input" 
+            placeholder="e.g. 15298"
+            pattern="[0-9]*"
+            inputmode="numeric"
+          >
+        </div>
+        <button id="set-job-btn" class="btn btn-primary">Load Job</button>
+      </div>
+
+      <!-- Tools Grid -->
+      <div id="tools-grid" class="tools-grid">
+        <!-- Tools will be inserted here by JavaScript -->
+      </div>
+
+      <!-- Logout -->
+      <div class="footer">
+        <button id="logout-btn" class="btn btn-text">🚪 Logout</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/hub.js"></script>
+</body>
+</html>

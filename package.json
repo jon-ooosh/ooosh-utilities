@@ -1,7 +1,7 @@
 {
   "name": "ooosh-utilities",
-  "version": "1.0.0",
-  "description": "OOOSH Operations Monitoring and Automation Utilities",
+  "version": "2.0.0",
+  "description": "OOOSH Operations Hub - Staff tools, monitoring and automation utilities",
   "private": true,
   "dependencies": {
     "nodemailer": "^6.9.7"

@@ -1,19 +1,36 @@
 # Netlify configuration for OOOSH Utilities
-# This repo contains monitoring and automation tools
+# This repo contains monitoring, automation tools, and the Staff Hub
 
 [build]
-  # No build step needed - just functions
-  publish = "."
+  # Serve static files from the public folder
+  publish = "public"
   functions = "netlify/functions"
 
 [functions]
   # Use Node.js 18
   node_bundler = "esbuild"
 
-# Allow the health check and dependency check to be called externally
+# Allow the functions to be called externally
 [[headers]]
   for = "/.netlify/functions/*"
   [headers.values]
     Access-Control-Allow-Origin = "*"
     Access-Control-Allow-Headers = "Content-Type"
     Access-Control-Allow-Methods = "GET, POST, OPTIONS"
+
+# Cache static assets
+[[headers]]
+  for = "/*.css"
+  [headers.values]
+    Cache-Control = "public, max-age=3600"
+
+[[headers]]
+  for = "/*.js"
+  [headers.values]
+    Cache-Control = "public, max-age=3600"
+
+# Redirect root to hub (optional - remove if you want a different landing page)
+# [[redirects]]
+#   from = "/"
+#   to = "/index.html"
+#   status = 200
