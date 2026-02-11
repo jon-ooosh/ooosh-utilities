@@ -1,0 +1,116 @@
+/**
+ * staff-auth.js
+ * 
+ * Validates staff PIN and returns a session token.
+ * Session tokens are valid for 8 hours.
+ * 
+ * POST body: { pin: "1234" }
+ * Returns: { success: true, sessionToken: "..." } or { success: false, error: "..." }
+ * 
+ * Environment variables required:
+ * - STAFF_PIN: The shared staff PIN
+ * - STAFF_HUB_SECRET: Secret for signing tokens
+ */
+
+const crypto = require('crypto');
+
+// Session duration: 8 hours
+const SESSION_DURATION_MS = 8 * 60 * 60 * 1000;
+
+exports.handler = async (event) => {
+  const headers = {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Headers': 'Content-Type',
+    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+    'Content-Type': 'application/json'
+  };
+
+  // Handle preflight
+  if (event.httpMethod === 'OPTIONS') {
+    return { statusCode: 200, headers, body: '' };
+  }
+
+  // Only accept POST
+  if (event.httpMethod !== 'POST') {
+    return {
+      statusCode: 405,
+      headers,
+      body: JSON.stringify({ success: false, error: 'Method not allowed' })
+    };
+  }
+
+  try {
+    const { pin } = JSON.parse(event.body || '{}');
+    
+    // Validate inputs
+    if (!pin) {
+      return {
+        statusCode: 400,
+        headers,
+        body: JSON.stringify({ success: false, error: 'PIN required' })
+      };
+    }
+
+    // Check PIN
+    const correctPin = process.env.STAFF_PIN;
+    if (!correctPin) {
+      console.error('STAFF_PIN environment variable not set');
+      return {
+        statusCode: 500,
+        headers,
+        body: JSON.stringify({ success: false, error: 'Server configuration error' })
+      };
+    }
+
+    if (pin !== correctPin) {
+      // Add small delay to prevent brute force
+      await new Promise(resolve => setTimeout(resolve, 500));
+      return {
+        statusCode: 401,
+        headers,
+        body: JSON.stringify({ success: false, error: 'Invalid PIN' })
+      };
+    }
+
+    // Generate session token
+    const secret = process.env.STAFF_HUB_SECRET;
+    if (!secret) {
+      console.error('STAFF_HUB_SECRET environment variable not set');
+      return {
+        statusCode: 500,
+        headers,
+        body: JSON.stringify({ success: false, error: 'Server configuration error' })
+      };
+    }
+
+    const expiry = Date.now() + SESSION_DURATION_MS;
+    const payload = `session.${expiry}`;
+    const signature = crypto
+      .createHmac('sha256', secret)
+      .update(payload)
+      .digest('hex')
+      .substring(0, 32);
+    
+    const sessionToken = `${payload}.${signature}`;
+
+    console.log('✅ Staff login successful');
+
+    return {
+      statusCode: 200,
+      headers,
+      body: JSON.stringify({
+        success: true,
+        sessionToken,
+        expiresAt: new Date(expiry).toISOString()
+      })
+    };
+
+  } catch (error) {
+    console.error('Auth error:', error);
+    return {
+      statusCode: 500,
+      headers,
+      body: JSON.stringify({ success: false, error: 'Server error' })
+    };
+  }
+};
