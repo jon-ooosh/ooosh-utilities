@@ -81,6 +81,13 @@ let sessionToken = null;
 // ============================================
 
 document.addEventListener('DOMContentLoaded', () => {
+  // Check for job ID in URL FIRST (before showing hub)
+  const urlParams = new URLSearchParams(window.location.search);
+  const jobFromUrl = urlParams.get('job');
+  if (jobFromUrl) {
+    currentJobId = jobFromUrl;
+  }
+  
   // Check for existing session
   sessionToken = localStorage.getItem('staffHubSession');
   const sessionExpiry = localStorage.getItem('staffHubSessionExpiry');
@@ -93,13 +100,6 @@ document.addEventListener('DOMContentLoaded', () => {
     localStorage.removeItem('staffHubSession');
     localStorage.removeItem('staffHubSessionExpiry');
     showLogin();
-  }
-  
-  // Check for job ID in URL
-  const urlParams = new URLSearchParams(window.location.search);
-  const jobFromUrl = urlParams.get('job');
-  if (jobFromUrl) {
-    currentJobId = jobFromUrl;
   }
   
   // Set up event listeners
