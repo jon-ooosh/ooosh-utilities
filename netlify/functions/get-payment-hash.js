@@ -1,0 +1,186 @@
+/**
+ * get-payment-hash.js
+ * 
+ * Fetches job data from HireHop and generates the payment portal hash.
+ * 
+ * Hash format: {creatorId}{totalHours}{jobId}
+ * 
+ * POST body: { sessionToken: "...", jobId: "12345" }
+ * Returns: { success: true, hash: "133613422" } or { success: false, error: "..." }
+ * 
+ * Environment variables required:
+ * - STAFF_HUB_SECRET: Secret for validating session
+ * - HIREHOP_API_TOKEN: HireHop API token
+ * - HIREHOP_DOMAIN: HireHop domain (default: myhirehop.com)
+ */
+
+const crypto = require('crypto');
+
+exports.handler = async (event) => {
+  const headers = {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Headers': 'Content-Type',
+    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+    'Content-Type': 'application/json'
+  };
+
+  // Handle preflight
+  if (event.httpMethod === 'OPTIONS') {
+    return { statusCode: 200, headers, body: '' };
+  }
+
+  // Only accept POST
+  if (event.httpMethod !== 'POST') {
+    return {
+      statusCode: 405,
+      headers,
+      body: JSON.stringify({ success: false, error: 'Method not allowed' })
+    };
+  }
+
+  try {
+    const { sessionToken, jobId } = JSON.parse(event.body || '{}');
+    
+    const secret = process.env.STAFF_HUB_SECRET;
+    if (!secret) {
+      console.error('STAFF_HUB_SECRET environment variable not set');
+      return {
+        statusCode: 500,
+        headers,
+        body: JSON.stringify({ success: false, error: 'Server configuration error' })
+      };
+    }
+
+    // Validate session token
+    if (!validateSessionToken(sessionToken, secret)) {
+      return {
+        statusCode: 401,
+        headers,
+        body: JSON.stringify({ success: false, error: 'Invalid or expired session' })
+      };
+    }
+
+    // Validate job ID
+    if (!jobId || !/^\d+$/.test(jobId)) {
+      return {
+        statusCode: 400,
+        headers,
+        body: JSON.stringify({ success: false, error: 'Valid job ID required' })
+      };
+    }
+
+    // Fetch job data from HireHop
+    const hirehopToken = process.env.HIREHOP_API_TOKEN;
+    const hirehopDomain = process.env.HIREHOP_DOMAIN || 'myhirehop.com';
+    
+    if (!hirehopToken) {
+      console.error('HIREHOP_API_TOKEN environment variable not set');
+      return {
+        statusCode: 500,
+        headers,
+        body: JSON.stringify({ success: false, error: 'HireHop not configured' })
+      };
+    }
+
+    console.log(`🔍 Fetching HireHop job ${jobId}...`);
+
+    const hirehopUrl = `https://${hirehopDomain}/api/job_data.php?job=${jobId}&token=${encodeURIComponent(hirehopToken)}`;
+    
+    const response = await fetch(hirehopUrl);
+    
+    if (!response.ok) {
+      console.error(`HireHop API error: ${response.status}`);
+      return {
+        statusCode: 502,
+        headers,
+        body: JSON.stringify({ success: false, error: 'Could not fetch job data from HireHop' })
+      };
+    }
+
+    const jobData = await response.json();
+    
+    // Check for HireHop error response
+    if (jobData.error) {
+      console.error(`HireHop error: ${jobData.error}`);
+      return {
+        statusCode: 404,
+        headers,
+        body: JSON.stringify({ success: false, error: `Job not found: ${jobData.error}` })
+      };
+    }
+
+    // Extract the required fields
+    const creatorId = jobData.USER_ID || jobData.user_id || jobData.created_by;
+    const totalHours = jobData.TOTAL_HOURS || jobData.total_hours || jobData.hours;
+    
+    if (creatorId === undefined || totalHours === undefined) {
+      console.error('Missing required fields from HireHop:', { creatorId, totalHours, keys: Object.keys(jobData) });
+      return {
+        statusCode: 500,
+        headers,
+        body: JSON.stringify({ 
+          success: false, 
+          error: 'Could not extract required fields from job data'
+        })
+      };
+    }
+
+    // Generate hash: creatorId + totalHours + jobId
+    const hoursInt = Math.floor(parseFloat(totalHours));
+    const hash = `${creatorId}${hoursInt}${jobId}`;
+
+    console.log(`✅ Generated payment hash for job ${jobId}: ${hash}`);
+
+    return {
+      statusCode: 200,
+      headers,
+      body: JSON.stringify({
+        success: true,
+        hash,
+        jobId,
+        jobName: jobData.JOB_NAME || jobData.job_name || jobData.name || null
+      })
+    };
+
+  } catch (error) {
+    console.error('Payment hash error:', error);
+    return {
+      statusCode: 500,
+      headers,
+      body: JSON.stringify({ success: false, error: 'Server error' })
+    };
+  }
+};
+
+/**
+ * Validates a session token
+ */
+function validateSessionToken(token, secret) {
+  if (!token || !secret) return false;
+  
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) return false;
+    
+    const [type, expiry, signature] = parts;
+    if (type !== 'session') return false;
+    
+    // Check expiry
+    const expiryTime = parseInt(expiry, 10);
+    if (isNaN(expiryTime) || Date.now() > expiryTime) {
+      return false;
+    }
+    
+    // Verify signature
+    const payload = `${type}.${expiry}`;
+    const expectedSig = crypto
+      .createHmac('sha256', secret)
+      .update(payload)
+      .digest('hex')
+      .substring(0, 32);
+    
+    return signature === expectedSig;
+  } catch {
+    return false;
+  }
+}
