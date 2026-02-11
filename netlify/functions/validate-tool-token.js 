@@ -1,0 +1,148 @@
+/**
+ * validate-tool-token.js
+ * 
+ * Validates handoff tokens from external tools.
+ * Tools call this endpoint to verify that a user came from the Staff Hub.
+ * 
+ * POST body: { token: "...", toolId: "my-tool" }
+ * Returns: { valid: true, jobId: "12345" } or { valid: false, error: "..." }
+ * 
+ * Environment variables required:
+ * - STAFF_HUB_SECRET: Secret for validating tokens
+ */
+
+const crypto = require('crypto');
+
+exports.handler = async (event) => {
+  const headers = {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Headers': 'Content-Type',
+    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+    'Content-Type': 'application/json'
+  };
+
+  // Handle preflight
+  if (event.httpMethod === 'OPTIONS') {
+    return { statusCode: 200, headers, body: '' };
+  }
+
+  // Only accept POST
+  if (event.httpMethod !== 'POST') {
+    return {
+      statusCode: 405,
+      headers,
+      body: JSON.stringify({ valid: false, error: 'Method not allowed' })
+    };
+  }
+
+  try {
+    const { token, toolId } = JSON.parse(event.body || '{}');
+    
+    const secret = process.env.STAFF_HUB_SECRET;
+    if (!secret) {
+      console.error('STAFF_HUB_SECRET environment variable not set');
+      return {
+        statusCode: 500,
+        headers,
+        body: JSON.stringify({ valid: false, error: 'Server configuration error' })
+      };
+    }
+
+    // Validate inputs
+    if (!token) {
+      return {
+        statusCode: 400,
+        headers,
+        body: JSON.stringify({ valid: false, error: 'Token required' })
+      };
+    }
+
+    // Validate token
+    const result = validateToolToken(token, secret, toolId);
+    
+    if (!result) {
+      return {
+        statusCode: 401,
+        headers,
+        body: JSON.stringify({ valid: false, error: 'Invalid or expired token' })
+      };
+    }
+
+    console.log(`✅ Valid token for tool ${result.toolId}, job ${result.jobId || 'none'}`);
+
+    return {
+      statusCode: 200,
+      headers,
+      body: JSON.stringify({
+        valid: true,
+        toolId: result.toolId,
+        jobId: result.jobId,
+        expiresAt: result.expiry.toISOString()
+      })
+    };
+
+  } catch (error) {
+    console.error('Token validation error:', error);
+    return {
+      statusCode: 500,
+      headers,
+      body: JSON.stringify({ valid: false, error: 'Server error' })
+    };
+  }
+};
+
+/**
+ * Validates a tool handoff token
+ * 
+ * Token format: {expiry}.{toolId}.{jobId}.{signature}
+ * 
+ * @param {string} token - The handoff token
+ * @param {string} secret - The shared secret
+ * @param {string} expectedToolId - Optional: verify token is for this tool
+ * @returns {object|false} - { toolId, jobId, expiry } or false if invalid
+ */
+function validateToolToken(token, secret, expectedToolId = null) {
+  if (!token || !secret) return false;
+  
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 4) return false;
+    
+    const [expiry, toolId, jobId, signature] = parts;
+    
+    // Check expiry
+    const expiryTime = parseInt(expiry, 10);
+    if (isNaN(expiryTime) || Date.now() > expiryTime) {
+      console.log('Token expired');
+      return false;
+    }
+    
+    // Check tool ID if specified
+    if (expectedToolId && toolId !== expectedToolId) {
+      console.log(`Token tool mismatch: expected ${expectedToolId}, got ${toolId}`);
+      return false;
+    }
+    
+    // Verify signature
+    const payload = `${expiry}.${toolId}.${jobId}`;
+    const expectedSig = crypto
+      .createHmac('sha256', secret)
+      .update(payload)
+      .digest('hex')
+      .substring(0, 32);
+    
+    if (signature !== expectedSig) {
+      console.log('Token signature invalid');
+      return false;
+    }
+    
+    return {
+      toolId,
+      jobId: jobId === 'none' ? null : jobId,
+      expiry: new Date(expiryTime)
+    };
+  } catch (error) {
+    console.error('Token parse error:', error);
+    return false;
+  }
+}
