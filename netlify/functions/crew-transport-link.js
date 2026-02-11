@@ -37,6 +37,8 @@ const TARGET_LINK_COLUMN = 'link_mm07k8n4';        // Where we write the portal 
 const TARGET_TEXT_COLUMN = 'text7';                // Where we write the job ID (text7)
 const DISPLAY_TEXT = 'Transport / crew';           // What the portal link shows as
 const PORTAL_BASE_URL = 'https://ooosh-freelancer-portal.netlify.app/staff/crew-transport?job=';
+const STAFF_HUB_COLUMN = 'link_mm0fwkxv';           // Staff Hub link column
+const STAFF_HUB_BASE_URL = 'https://ooosh-utilities.netlify.app/?job=';
 
 // Retry configuration (matching other functions in this repo)
 const RETRY_CONFIG = {
@@ -198,14 +200,17 @@ exports.handler = async (event) => {
     const portalUrl = PORTAL_BASE_URL + jobId;
     console.log(`✨ Portal URL: ${portalUrl}`);
 
-    // Update all three columns
+    // Update all four columns
     // 1. Target link column (portal link with "Transport / crew" text)
     // 2. Text column (just the job ID) - CRITICAL for workflows
     // 3. Source link column (same URL but with job ID as display text)
+    // 4. Staff Hub link column (hub URL with job ID)
+    const staffHubUrl = STAFF_HUB_BASE_URL + jobId;
     await updateMultipleColumns(itemId, {
       [TARGET_LINK_COLUMN]: { url: portalUrl, text: DISPLAY_TEXT },
       [TARGET_TEXT_COLUMN]: jobId,
-      [SOURCE_LINK_COLUMN]: { url: hirehopUrl, text: jobId }
+      [SOURCE_LINK_COLUMN]: { url: hirehopUrl, text: jobId },
+      [STAFF_HUB_COLUMN]: { url: staffHubUrl, text: 'Staff Hub' }
     });
 
     console.log('✅ All columns updated successfully');

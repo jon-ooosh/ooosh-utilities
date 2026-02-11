@@ -19,7 +19,7 @@ const TOOLS = [
     name: 'Crew & Transport',
     description: 'Quote deliveries, collections & crewed jobs',
     icon: '🚛',
-    baseUrl: 'https://ooosh-freelancer-portal.netlify.app/staff/crew-transport',
+    baseUrl: 'https://ooosh-freelancer-portal.netlify.app/staff',
     requiresJob: true,
     jobParam: 'job'
   },
