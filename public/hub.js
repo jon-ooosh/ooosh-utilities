@@ -29,7 +29,8 @@ const TOOLS = [
     description: 'Match equipment across jobs',
     icon: '🎸',
     baseUrl: 'https://alternative-hirehop-stock.netlify.app/app',
-    requiresJob: false
+    requiresJob: false,
+    jobParam: 'job'  // Will pass job if one is set, but not required
   },
   {
     id: 'payment-portal',
@@ -318,8 +319,8 @@ async function launchTool(tool) {
     let url = tool.baseUrl;
     const params = new URLSearchParams();
     
-    // Add job ID if required
-    if (tool.requiresJob && currentJobId) {
+    // Add job ID if required OR if tool accepts it optionally
+    if (currentJobId && (tool.requiresJob || tool.jobParam)) {
       params.set(tool.jobParam || 'job', currentJobId);
     }
     
@@ -366,3 +367,4 @@ async function launchTool(tool) {
     cards.forEach(c => c.style.pointerEvents = '');
   }
 }
+
