@@ -6,7 +6,7 @@
  * - Session management
  * - Tool launching with token handoff
  * - Job context management
- */
+ */ 
 
 // ============================================
 // TOOLS CONFIGURATION
@@ -39,8 +39,7 @@ const TOOLS = [
     baseUrl: 'https://ooosh-tours-payment-page.netlify.app/payment.html',
     requiresJob: true,
     jobParam: 'jobId',
-    special: 'payment-hash'  // Needs hash from HireHop
-  },
+    },
   {
     id: 'admin-refund',
     name: 'Admin Refund',
