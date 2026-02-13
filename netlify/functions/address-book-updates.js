@@ -277,7 +277,13 @@ async function updateMultipleColumns(boardId, itemId, columns) {
   const columnValues = {};
   
   for (const [columnId, value] of Object.entries(columns)) {
-    columnValues[columnId] = value;
+    // Email columns need special format: { email: "...", text: "..." }
+    // text1 is the client email column on Q&H board
+    if (columnId === QH_COLUMNS.clientEmail && value) {
+      columnValues[columnId] = { email: value, text: value };
+    } else {
+      columnValues[columnId] = value;
+    }
   }
 
   const mutation = `
