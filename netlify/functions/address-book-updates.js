@@ -267,11 +267,11 @@ async function findQHItemsLinkedToClient(addressBookItemId) {
   const query = `
     query {
       boards(ids: [${QH_BOARD_ID}]) {
-        items_page(limit: 500) {
+        items_page(limit: 10) {
           items {
             id
             name
-            column_values(ids: ["connect_boards7"]) {
+            column_values {
               id
               value
               text
@@ -282,10 +282,23 @@ async function findQHItemsLinkedToClient(addressBookItemId) {
     }
   `;
 
-  const result = await callMondayAPI(query);
+ const result = await callMondayAPI(query);
   const items = result.data?.boards?.[0]?.items_page?.items || [];
   
   console.log(`🔍 DEBUG - Scanned ${items.length} Q&H items`);
+  
+  // Log all column IDs from first item to find the right connect column
+  if (items.length > 0) {
+    const firstItem = items[0];
+    const columnIds = firstItem.column_values.map(c => c.id);
+    console.log(`🔍 DEBUG - First item column IDs: ${columnIds.join(', ')}`);
+    
+    // Find any column that looks like a connect/link column
+    const connectColumns = firstItem.column_values.filter(c => 
+      c.id.includes('connect') || c.id.includes('link') || c.id.includes('board')
+    );
+    console.log(`🔍 DEBUG - Connect-like columns: ${JSON.stringify(connectColumns)}`);
+  }
   
   const linkedIds = [];
   let checkedCount = 0;
