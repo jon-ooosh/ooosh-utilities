@@ -148,15 +148,10 @@ exports.handler = async (event) => {
       });
       actions.push('updated_name_columns');
 
-      // Sync to linked Q&H items
-      // Debug: Log the raw connected column value
-      const linkedColumn = itemData.column_values.find(col => col.id === AB_COLUMNS.linkedQH);
-      console.log(`🔍 DEBUG - Connected column ID: ${AB_COLUMNS.linkedQH}`);
-      console.log(`🔍 DEBUG - Connected column raw value: ${linkedColumn?.value || '(null)'}`);
-      console.log(`🔍 DEBUG - Connected column text: ${linkedColumn?.text || '(null)'}`);
-
-      // Sync to linked Q&H items
-      const linkedQHIds = getLinkedItemIds(itemData.column_values, AB_COLUMNS.linkedQH);
+      // Find Q&H items that link to this Address Book client
+      // (We query Q&H board because Address Book doesn't store reverse links)
+      console.log(`🔍 Searching Q&H board for items linked to Address Book item ${itemId}...`);
+      const linkedQHIds = await findQHItemsLinkedToClient(itemId);
       console.log(`🔗 Found ${linkedQHIds.length} linked Q&H items`);
 
       for (const qhItemId of linkedQHIds) {
@@ -178,14 +173,10 @@ exports.handler = async (event) => {
       const email = getColumnText(itemData.column_values, AB_COLUMNS.email);
       console.log(`📧 Email changed to: "${email || '(empty)'}"`);
 
-      // Debug: Log the raw connected column value
-      const linkedColumn = itemData.column_values.find(col => col.id === AB_COLUMNS.linkedQH);
-      console.log(`🔍 DEBUG - Connected column ID: ${AB_COLUMNS.linkedQH}`);
-      console.log(`🔍 DEBUG - Connected column raw value: ${linkedColumn?.value || '(null)'}`);
-      console.log(`🔍 DEBUG - Connected column text: ${linkedColumn?.text || '(null)'}`);
-
-      // Sync to linked Q&H items
-      const linkedQHIds = getLinkedItemIds(itemData.column_values, AB_COLUMNS.linkedQH);
+     // Find Q&H items that link to this Address Book client
+      // (We query Q&H board because Address Book doesn't store reverse links)
+      console.log(`🔍 Searching Q&H board for items linked to Address Book item ${itemId}...`);
+      const linkedQHIds = await findQHItemsLinkedToClient(itemId);
       console.log(`🔗 Found ${linkedQHIds.length} linked Q&H items`);
 
       for (const qhItemId of linkedQHIds) {
@@ -266,6 +257,56 @@ function extractFirstName(fullName) {
 // ============================================================================
 // MONDAY.COM API HELPERS
 // ============================================================================
+
+/**
+ * Find Q&H items that link to a specific Address Book client
+ * Uses items_page_by_column_values to search connect_boards7
+ */
+async function findQHItemsLinkedToClient(addressBookItemId) {
+  // Query Q&H board for items where connect_boards7 links to this client
+  const query = `
+    query {
+      boards(ids: [${QH_BOARD_ID}]) {
+        items_page(limit: 500) {
+          items {
+            id
+            column_values(ids: ["connect_boards7"]) {
+              id
+              value
+            }
+          }
+        }
+      }
+    }
+  `;
+
+  const result = await callMondayAPI(query);
+  const items = result.data?.boards?.[0]?.items_page?.items || [];
+  
+  const linkedIds = [];
+  
+  for (const item of items) {
+    const connectColumn = item.column_values.find(c => c.id === 'connect_boards7');
+    if (connectColumn?.value) {
+      try {
+        const parsed = JSON.parse(connectColumn.value);
+        // Check if this Q&H item links to our Address Book client
+        if (parsed.linkedPulseIds) {
+          const linksToUs = parsed.linkedPulseIds.some(
+            link => String(link.linkedPulseId) === String(addressBookItemId)
+          );
+          if (linksToUs) {
+            linkedIds.push(item.id);
+          }
+        }
+      } catch (e) {
+        // Skip items with unparseable values
+      }
+    }
+  }
+  
+  return linkedIds;
+}
 
 async function fetchItemDetails(itemId) {
   const query = `
