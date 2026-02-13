@@ -180,7 +180,12 @@ async function updateMultipleColumns(itemId, columns) {
   const columnValues = {};
   
   for (const [columnId, value] of Object.entries(columns)) {
-    columnValues[columnId] = value;
+    // Email columns need special format: { email: "...", text: "..." }
+    if (columnId === COLUMNS.clientEmail && value) {
+      columnValues[columnId] = { email: value, text: value };
+    } else {
+      columnValues[columnId] = value;
+    }
   }
 
   const mutation = `

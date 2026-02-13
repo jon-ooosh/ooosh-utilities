@@ -37,8 +37,8 @@ const QH_COLUMNS = {
   clientEmail: 'text1'
 };
 
-// Monitored columns
-const MONITORED_COLUMNS = ['name', AB_COLUMNS.email, AB_COLUMNS.linkedQH];
+// Monitored columns (undefined = item name change, which Monday sends without a columnId)
+const MONITORED_COLUMNS = ['name', undefined, AB_COLUMNS.email, AB_COLUMNS.linkedQH];
 
 // Prefixes to remove when extracting first name
 const NAME_PREFIXES = ['mr', 'mrs', 'ms', 'miss', 'dr', 'prof', 'sir', 'lady', 'rev', 'mx'];
@@ -105,7 +105,10 @@ exports.handler = async (event) => {
     }
 
     // Verify column is one we care about
-    if (!MONITORED_COLUMNS.includes(columnId)) {
+    // Note: Item name changes come through with columnId = undefined
+    const isNameChange = columnId === undefined || columnId === 'name';
+    
+    if (!isNameChange && !MONITORED_COLUMNS.includes(columnId)) {
       console.log(`⏭️ Ignoring change to column ${columnId}`);
       return {
         statusCode: 200,
@@ -131,7 +134,7 @@ exports.handler = async (event) => {
     // ========================================
     // HANDLE: Item name changed
     // ========================================
-    if (columnId === 'name') {
+      if (columnId === 'name' || columnId === undefined) {
       const itemName = itemData.name || '';
       const firstName = extractFirstName(itemName);
 
