@@ -260,19 +260,21 @@ function extractFirstName(fullName) {
 
 /**
  * Find Q&H items that link to a specific Address Book client
- * Uses items_page_by_column_values to search connect_boards7
+ * Uses items_page to search connect_boards7
  */
 async function findQHItemsLinkedToClient(addressBookItemId) {
-  // Query Q&H board for items where connect_boards7 links to this client
+  // Query Q&H board for items with their connect_boards7 value
   const query = `
     query {
       boards(ids: [${QH_BOARD_ID}]) {
         items_page(limit: 500) {
           items {
             id
+            name
             column_values(ids: ["connect_boards7"]) {
               id
               value
+              text
             }
           }
         }
@@ -283,27 +285,50 @@ async function findQHItemsLinkedToClient(addressBookItemId) {
   const result = await callMondayAPI(query);
   const items = result.data?.boards?.[0]?.items_page?.items || [];
   
+  console.log(`🔍 DEBUG - Scanned ${items.length} Q&H items`);
+  
   const linkedIds = [];
+  let checkedCount = 0;
   
   for (const item of items) {
     const connectColumn = item.column_values.find(c => c.id === 'connect_boards7');
-    if (connectColumn?.value) {
+    
+    if (connectColumn?.value && connectColumn.value !== 'null') {
+      checkedCount++;
+      
+      // Log first few items with connections for debugging
+      if (checkedCount <= 3) {
+        console.log(`🔍 DEBUG - Q&H item ${item.id} (${item.name}) connect_boards7 value: ${connectColumn.value}`);
+      }
+      
       try {
         const parsed = JSON.parse(connectColumn.value);
+        
         // Check if this Q&H item links to our Address Book client
-        if (parsed.linkedPulseIds) {
-          const linksToUs = parsed.linkedPulseIds.some(
-            link => String(link.linkedPulseId) === String(addressBookItemId)
-          );
-          if (linksToUs) {
-            linkedIds.push(item.id);
+        if (parsed.linkedPulseIds && Array.isArray(parsed.linkedPulseIds)) {
+          for (const link of parsed.linkedPulseIds) {
+            const linkedId = link.linkedPulseId;
+            
+            // Log comparison for first few
+            if (checkedCount <= 3) {
+              console.log(`🔍 DEBUG - Comparing linkedPulseId ${linkedId} (type: ${typeof linkedId}) with target ${addressBookItemId} (type: ${typeof addressBookItemId})`);
+            }
+            
+            // Compare as strings to be safe
+            if (String(linkedId) === String(addressBookItemId)) {
+              console.log(`✅ DEBUG - Found match! Q&H item ${item.id} links to Address Book item ${addressBookItemId}`);
+              linkedIds.push(item.id);
+              break;
+            }
           }
         }
       } catch (e) {
-        // Skip items with unparseable values
+        console.log(`⚠️ DEBUG - Failed to parse connect_boards7 for item ${item.id}: ${e.message}`);
       }
     }
   }
+  
+  console.log(`🔍 DEBUG - ${checkedCount} Q&H items have connections, found ${linkedIds.length} linking to target`);
   
   return linkedIds;
 }
