@@ -260,21 +260,22 @@ function extractFirstName(fullName) {
 
 /**
  * Find Q&H items that link to a specific Address Book client
- * Uses items_page to search connect_boards7
+ * Uses BoardRelationValue fragment to properly read connect_boards columns
  */
 async function findQHItemsLinkedToClient(addressBookItemId) {
-  // Query Q&H board for items with their connect_boards7 value
+  // Query Q&H board using BoardRelationValue fragment for connect columns
   const query = `
     query {
       boards(ids: [${QH_BOARD_ID}]) {
-        items_page(limit: 10) {
+        items_page(limit: 500) {
           items {
             id
             name
-            column_values {
+            column_values(ids: ["connect_boards7"]) {
               id
-              value
-              text
+              ... on BoardRelationValue {
+                linked_item_ids
+              }
             }
           }
         }
@@ -282,23 +283,10 @@ async function findQHItemsLinkedToClient(addressBookItemId) {
     }
   `;
 
- const result = await callMondayAPI(query);
+  const result = await callMondayAPI(query);
   const items = result.data?.boards?.[0]?.items_page?.items || [];
   
   console.log(`🔍 DEBUG - Scanned ${items.length} Q&H items`);
-  
-  // Log all column IDs from first item to find the right connect column
-  if (items.length > 0) {
-    const firstItem = items[0];
-    const columnIds = firstItem.column_values.map(c => c.id);
-    console.log(`🔍 DEBUG - First item column IDs: ${columnIds.join(', ')}`);
-    
-    // Find any column that looks like a connect/link column
-    const connectColumns = firstItem.column_values.filter(c => 
-      c.id.includes('connect') || c.id.includes('link') || c.id.includes('board')
-    );
-    console.log(`🔍 DEBUG - Connect-like columns: ${JSON.stringify(connectColumns)}`);
-  }
   
   const linkedIds = [];
   let checkedCount = 0;
@@ -306,37 +294,22 @@ async function findQHItemsLinkedToClient(addressBookItemId) {
   for (const item of items) {
     const connectColumn = item.column_values.find(c => c.id === 'connect_boards7');
     
-    if (connectColumn?.value && connectColumn.value !== 'null') {
+    // Log first few for debugging
+    if (checkedCount < 3) {
+      console.log(`🔍 DEBUG - Q&H item ${item.id} connect_boards7: ${JSON.stringify(connectColumn)}`);
+    }
+    
+    if (connectColumn?.linked_item_ids && connectColumn.linked_item_ids.length > 0) {
       checkedCount++;
       
-      // Log first few items with connections for debugging
-      if (checkedCount <= 3) {
-        console.log(`🔍 DEBUG - Q&H item ${item.id} (${item.name}) connect_boards7 value: ${connectColumn.value}`);
-      }
+      // Check if this Q&H item links to our Address Book client
+      const linksToUs = connectColumn.linked_item_ids.some(
+        linkedId => String(linkedId) === String(addressBookItemId)
+      );
       
-      try {
-        const parsed = JSON.parse(connectColumn.value);
-        
-        // Check if this Q&H item links to our Address Book client
-        if (parsed.linkedPulseIds && Array.isArray(parsed.linkedPulseIds)) {
-          for (const link of parsed.linkedPulseIds) {
-            const linkedId = link.linkedPulseId;
-            
-            // Log comparison for first few
-            if (checkedCount <= 3) {
-              console.log(`🔍 DEBUG - Comparing linkedPulseId ${linkedId} (type: ${typeof linkedId}) with target ${addressBookItemId} (type: ${typeof addressBookItemId})`);
-            }
-            
-            // Compare as strings to be safe
-            if (String(linkedId) === String(addressBookItemId)) {
-              console.log(`✅ DEBUG - Found match! Q&H item ${item.id} links to Address Book item ${addressBookItemId}`);
-              linkedIds.push(item.id);
-              break;
-            }
-          }
-        }
-      } catch (e) {
-        console.log(`⚠️ DEBUG - Failed to parse connect_boards7 for item ${item.id}: ${e.message}`);
+      if (linksToUs) {
+        console.log(`✅ Found match! Q&H item ${item.id} links to Address Book item ${addressBookItemId}`);
+        linkedIds.push(item.id);
       }
     }
   }
