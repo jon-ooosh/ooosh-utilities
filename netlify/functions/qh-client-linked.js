@@ -164,6 +164,9 @@ async function fetchItemDetails(itemId) {
           id
           text
           value
+          ... on MirrorValue {
+            display_value
+          }
         }
       }
     }
@@ -226,13 +229,17 @@ async function callMondayAPI(query) {
 // UTILITY FUNCTIONS
 // ============================================================================
 
+
 /**
  * Get value from a mirror column
- * Mirror columns store display_value in text field
+ * Mirror columns need display_value (not text) via the MirrorValue fragment
  */
 function getMirrorValue(columnValues, columnId) {
   const column = columnValues.find(col => col.id === columnId);
-  return column?.text || null;
+  if (!column) return null;
+  
+  // Mirror columns use display_value, fall back to text for regular columns
+  return column.display_value !== undefined ? column.display_value : column.text;
 }
 
 function escapeJson(str) {

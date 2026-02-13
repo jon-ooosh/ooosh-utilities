@@ -293,13 +293,17 @@ async function updateMultipleColumns(boardId, itemId, columns) {
 }
 
 async function updateDateColumn(boardId, itemId, columnId, dateValue) {
+  // Date columns need the JSON format via change_multiple_column_values
+  const columnValues = {
+    [columnId]: { date: dateValue }
+  };
+
   const mutation = `
     mutation {
-      change_simple_column_value (
+      change_multiple_column_values (
         item_id: ${itemId},
         board_id: ${boardId},
-        column_id: "${columnId}",
-        value: "${escapeJson(JSON.stringify({ date: dateValue }))}"
+        column_values: "${escapeJson(JSON.stringify(columnValues))}"
       ) {
         id
       }
