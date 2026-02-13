@@ -149,6 +149,13 @@ exports.handler = async (event) => {
       actions.push('updated_name_columns');
 
       // Sync to linked Q&H items
+      // Debug: Log the raw connected column value
+      const linkedColumn = itemData.column_values.find(col => col.id === AB_COLUMNS.linkedQH);
+      console.log(`🔍 DEBUG - Connected column ID: ${AB_COLUMNS.linkedQH}`);
+      console.log(`🔍 DEBUG - Connected column raw value: ${linkedColumn?.value || '(null)'}`);
+      console.log(`🔍 DEBUG - Connected column text: ${linkedColumn?.text || '(null)'}`);
+
+      // Sync to linked Q&H items
       const linkedQHIds = getLinkedItemIds(itemData.column_values, AB_COLUMNS.linkedQH);
       console.log(`🔗 Found ${linkedQHIds.length} linked Q&H items`);
 
@@ -167,9 +174,15 @@ exports.handler = async (event) => {
     // ========================================
     // HANDLE: Email changed
     // ========================================
-    if (columnId === AB_COLUMNS.email) {
+   if (columnId === AB_COLUMNS.email) {
       const email = getColumnText(itemData.column_values, AB_COLUMNS.email);
       console.log(`📧 Email changed to: "${email || '(empty)'}"`);
+
+      // Debug: Log the raw connected column value
+      const linkedColumn = itemData.column_values.find(col => col.id === AB_COLUMNS.linkedQH);
+      console.log(`🔍 DEBUG - Connected column ID: ${AB_COLUMNS.linkedQH}`);
+      console.log(`🔍 DEBUG - Connected column raw value: ${linkedColumn?.value || '(null)'}`);
+      console.log(`🔍 DEBUG - Connected column text: ${linkedColumn?.text || '(null)'}`);
 
       // Sync to linked Q&H items
       const linkedQHIds = getLinkedItemIds(itemData.column_values, AB_COLUMNS.linkedQH);
