@@ -122,7 +122,7 @@ exports.handler = async (event) => {
 
     // Update each linked D&C item
     for (const dcItemId of linkedDCIds) {
-      await updateEmailColumn(DC_BOARD_ID, dcItemId, COLUMNS.dcDriverEmail, email || '');
+      await updateTextColumn(DC_BOARD_ID, dcItemId, COLUMNS.dcDriverEmail, email || '');
       console.log(`✅ Updated D&C item ${dcItemId}`);
     }
 
@@ -222,7 +222,7 @@ async function findDCItemsLinkedToFreelancer(freelancerItemId) {
   return linkedIds;
 }
 
-async function updateTextColumn(itemId, columnId, value) {
+async function updateTextColumn(boardId, itemId, columnId, value) {
   // driver_email__gc_ is a text column, not an email column
   const columnValues = {
     [columnId]: value || ''
