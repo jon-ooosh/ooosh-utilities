@@ -66,6 +66,15 @@ const TOOLS = [
     baseUrl: 'https://ooosh-tours-pcn-management.netlify.app/index.html',
     requiresJob: false
   }
+  {
+    id: 'vehicle-management',
+    name: 'Vehicle Management',
+    description: 'Fleet and vehicle tracking',
+    icon: '🚐',
+    baseUrl: 'https://ooosh-vehicle-management.netlify.app/',
+    requiresJob: false,
+    jobParam: 'job'  // Will pass job if one is set, but not required
+  }
 ];
 
 // ============================================
