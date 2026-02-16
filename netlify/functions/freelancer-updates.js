@@ -222,20 +222,17 @@ async function findDCItemsLinkedToFreelancer(freelancerItemId) {
   return linkedIds;
 }
 
-async function updateEmailColumn(boardId, itemId, columnId, email) {
-  const columnValues = {};
-  
-  if (email) {
-    columnValues[columnId] = { email: email, text: email };
-  } else {
-    columnValues[columnId] = '';
-  }
+async function updateTextColumn(itemId, columnId, value) {
+  // driver_email__gc_ is a text column, not an email column
+  const columnValues = {
+    [columnId]: value || ''
+  };
 
   const mutation = `
     mutation {
       change_multiple_column_values (
         item_id: ${itemId},
-        board_id: ${boardId},
+        board_id: ${BOARD_ID},
         column_values: "${escapeJson(JSON.stringify(columnValues))}"
       ) {
         id

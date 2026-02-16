@@ -114,8 +114,8 @@ exports.handler = async (event) => {
 
     console.log(`📧 Mirrored email: "${mirroredEmail || '(empty)'}"`);
 
-    // Update target column (email format)
-    await updateEmailColumn(itemId, COLUMNS.driverEmail, mirroredEmail || '');
+    // Update target column (text format - driver_email__gc_ is a text column)
+    await updateTextColumn(itemId, COLUMNS.driverEmail, mirroredEmail || '');
 
     console.log('✅ Driver email copied from mirror');
 
@@ -168,15 +168,11 @@ async function fetchItemDetails(itemId) {
   return result.data?.items?.[0] || null;
 }
 
-async function updateEmailColumn(itemId, columnId, email) {
-  // Email columns need special format
-  const columnValues = {};
-  
-  if (email) {
-    columnValues[columnId] = { email: email, text: email };
-  } else {
-    columnValues[columnId] = '';
-  }
+async function updateTextColumn(itemId, columnId, value) {
+  // driver_email__gc_ is a text column, not an email column
+  const columnValues = {
+    [columnId]: value || ''
+  };
 
   const mutation = `
     mutation {
