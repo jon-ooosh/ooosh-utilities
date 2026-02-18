@@ -65,7 +65,7 @@ const TOOLS = [
     icon: '🚗',
     baseUrl: 'https://ooosh-tours-pcn-management.netlify.app/index.html',
     requiresJob: false
-  }
+  },
   {
     id: 'vehicle-management',
     name: 'Vehicle Management',
