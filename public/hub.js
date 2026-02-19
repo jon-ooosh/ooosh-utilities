@@ -32,6 +32,15 @@ const TOOLS = [
     requiresJob: false,
     jobParam: 'job'  // Will pass job if one is set, but not required
   },
+   {
+    id: 'staging-calculator',
+    name: 'Staging Calculator',
+    description: 'Calculate deck, leg & hardware requirements',
+    icon: '🏗️',
+    baseUrl: '/staging-calculator.html',  // Same domain — no token handoff needed
+    requiresJob: false,
+    jobParam: 'job'  // Will pass job if one is set (for future HireHop push)
+  },
   {
     id: 'payment-portal',
     name: 'Payment Portal',
