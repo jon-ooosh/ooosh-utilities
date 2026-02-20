@@ -23,32 +23,60 @@
     <div class="card input-card">
       <form id="calc-form">
         <div class="form-row">
-          <!-- Unit Toggle -->
+
+          <!-- Unit Toggle (pill style) -->
           <div class="form-group unit-group">
-            <label for="unit-toggle">Units</label>
-            <select id="unit-toggle">
-              <option value="m">Meters</option>
-              <option value="ft">Feet</option>
-            </select>
+            <label>Units</label>
+            <div class="unit-toggle-pill" id="unit-toggle-pill">
+              <button type="button" class="unit-btn active" data-unit="m">m</button>
+              <button type="button" class="unit-btn" data-unit="ft">ft / in</button>
+            </div>
           </div>
 
           <!-- Length -->
-          <div class="form-group">
-            <label id="length-label" for="stage-length">Length (m)</label>
-            <input type="number" id="stage-length" step="any" min="0.1" placeholder="Length" required>
+          <div class="form-group dim-group">
+            <label id="length-label">Length</label>
+            <!-- Metric input (visible when m selected) -->
+            <div class="input-metric" id="length-metric">
+              <input type="number" id="stage-length-m" step="any" min="0.01" placeholder="m" required>
+            </div>
+            <!-- Imperial inputs (visible when ft selected) -->
+            <div class="input-imperial hidden" id="length-imperial">
+              <input type="number" id="stage-length-ft" step="1" min="0" placeholder="ft">
+              <span class="imperial-sep">'</span>
+              <input type="number" id="stage-length-in" step="0.25" min="0" max="11.75" placeholder="in">
+              <span class="imperial-sep">"</span>
+            </div>
           </div>
 
           <!-- Width -->
-          <div class="form-group">
-            <label id="width-label" for="stage-width">Width (m)</label>
-            <input type="number" id="stage-width" step="any" min="0.1" placeholder="Width" required>
+          <div class="form-group dim-group">
+            <label id="width-label">Width</label>
+            <div class="input-metric" id="width-metric">
+              <input type="number" id="stage-width-m" step="any" min="0.01" placeholder="m" required>
+            </div>
+            <div class="input-imperial hidden" id="width-imperial">
+              <input type="number" id="stage-width-ft" step="1" min="0" placeholder="ft">
+              <span class="imperial-sep">'</span>
+              <input type="number" id="stage-width-in" step="0.25" min="0" max="11.75" placeholder="in">
+              <span class="imperial-sep">"</span>
+            </div>
           </div>
 
           <!-- Height -->
-          <div class="form-group">
-            <label id="height-label" for="stage-height">Height (m)</label>
-            <input type="number" id="stage-height" step="any" min="0.1" placeholder="Height" required>
+          <div class="form-group dim-group">
+            <label id="height-label">Height</label>
+            <div class="input-metric" id="height-metric">
+              <input type="number" id="stage-height-m" step="any" min="0.01" placeholder="m" required>
+            </div>
+            <div class="input-imperial hidden" id="height-imperial">
+              <input type="number" id="stage-height-ft" step="1" min="0" placeholder="ft">
+              <span class="imperial-sep">'</span>
+              <input type="number" id="stage-height-in" step="0.25" min="0" max="11.75" placeholder="in">
+              <span class="imperial-sep">"</span>
+            </div>
           </div>
+
         </div>
 
         <div class="form-row">

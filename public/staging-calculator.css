@@ -149,8 +149,13 @@ select:focus {
 }
 
 .unit-group {
-  flex: 0.6;
-  min-width: 100px;
+  flex: 0 0 auto;
+  min-width: auto;
+}
+
+.dim-group {
+  flex: 1;
+  min-width: 140px;
 }
 
 .combiner-group {
@@ -162,6 +167,67 @@ select:focus {
   min-width: auto;
   display: flex;
   align-items: flex-end;
+}
+
+/* ============================================
+   Unit Toggle Pill
+   ============================================ */
+
+.unit-toggle-pill {
+  display: inline-flex;
+  border: 2px solid #e5e7eb;
+  border-radius: 10px;
+  overflow: hidden;
+  background: #f9fafb;
+}
+
+.unit-btn {
+  padding: 9px 16px;
+  font-size: 14px;
+  font-weight: 600;
+  font-family: inherit;
+  border: none;
+  background: transparent;
+  color: #6b7280;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+
+.unit-btn.active {
+  background: #5b9bd5;
+  color: white;
+}
+
+.unit-btn:not(.active):hover {
+  background: #e8f0fe;
+  color: #374151;
+}
+
+/* ============================================
+   Imperial Dual Inputs (ft / in)
+   ============================================ */
+
+.input-imperial {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.input-imperial input[type="number"] {
+  width: 70px;
+  flex: 1;
+  min-width: 50px;
+  padding: 10px 8px;
+  text-align: center;
+}
+
+.imperial-sep {
+  font-size: 16px;
+  font-weight: 600;
+  color: #9ca3af;
+  flex-shrink: 0;
+  line-height: 1;
 }
 
 /* ============================================
@@ -228,6 +294,12 @@ select:focus {
   font-size: 18px;
   font-weight: 700;
   color: #1a1a2e;
+}
+
+.dim-secondary {
+  font-size: 13px;
+  color: #6b7280;
+  margin-top: 1px;
 }
 
 .dim-adjusted {
@@ -433,6 +505,94 @@ select:focus {
 }
 
 /* ============================================
+   Stock Alternatives Section
+   ============================================ */
+
+.alt-section {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 2px dashed #e5e7eb;
+}
+
+.alt-section h3 {
+  font-size: 14px;
+  font-weight: 700;
+  color: #374151;
+  margin-bottom: 10px;
+}
+
+.alt-height-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.alt-height-chip {
+  padding: 8px 16px;
+  font-size: 13px;
+  font-weight: 500;
+  border: 2px solid #dcfce7;
+  background: #f0fdf4;
+  color: #15803d;
+  border-radius: 10px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.2s;
+  line-height: 1.3;
+}
+
+.alt-height-chip:hover {
+  background: #dcfce7;
+  border-color: #86efac;
+}
+
+.alt-height-chip .alt-chip-label {
+  display: block;
+  font-weight: 700;
+  font-size: 14px;
+}
+
+.alt-height-chip .alt-chip-desc {
+  display: block;
+  font-size: 11px;
+  color: #4ade80;
+  margin-top: 2px;
+}
+
+.alt-deck-card {
+  background: #f0fdf4;
+  border: 2px solid #bbf7d0;
+  border-radius: 12px;
+  padding: 16px;
+  margin-top: 12px;
+}
+
+.alt-deck-card h4 {
+  font-size: 13px;
+  font-weight: 700;
+  color: #15803d;
+  margin-bottom: 8px;
+}
+
+.alt-deck-list {
+  list-style: none;
+  padding: 0;
+  font-size: 13px;
+  color: #374151;
+}
+
+.alt-deck-list li {
+  padding: 3px 0;
+}
+
+.alt-deck-list li::before {
+  content: '✓ ';
+  color: #22c55e;
+  font-weight: 700;
+}
+
+/* ============================================
    Responsive
    ============================================ */
 
@@ -451,6 +611,10 @@ select:focus {
   }
 
   .form-group {
+    min-width: 100%;
+  }
+
+  .dim-group {
     min-width: 100%;
   }
 

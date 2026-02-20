@@ -8,7 +8,9 @@
  * Phase 1: Calculator engine + UI (read-only)
  * Phase 2: HireHop integration + PDF output (later)
  * 
- * v1.0 - Initial implementation
+ * v1.1 - Unit toggle pill, ft/in split fields, auto-convert,
+ *         unit-aware display, nearest stock leg suggestions,
+ *         stock-constrained deck alternatives
  */
 
 // ============================================================================
@@ -120,6 +122,22 @@ function formatDimension(inches) {
   return `${inchesToFeetStr(inches)} (${inchesToMetricStr(inches)})`;
 }
 
+/** Format inches for the currently selected unit (primary display) */
+function formatDimensionForUnit(inches, unit) {
+  if (unit === 'm') {
+    return inchesToMetricStr(inches);
+  }
+  return inchesToFeetStr(inches);
+}
+
+/** Format inches with primary unit first and secondary in brackets */
+function formatDimensionPrimary(inches, unit) {
+  if (unit === 'm') {
+    return `${inchesToMetricStr(inches)} (${inchesToFeetStr(inches)})`;
+  }
+  return `${inchesToFeetStr(inches)} (${inchesToMetricStr(inches)})`;
+}
+
 
 // ============================================================================
 // TILING ALGORITHM
@@ -131,13 +149,22 @@ function formatDimension(inches) {
  * Tile a rectangular area (lengthIn x widthIn) with available deck sizes.
  * Returns an array of placed decks with positions, or null if impossible.
  * 
+ * @param {number} targetLengthIn - Target length in inches
+ * @param {number} targetWidthIn - Target width in inches
+ * @param {boolean} inStockOnly - If true, only use decks with qty > 0
+ * @returns {Array|null} Placed decks or null if impossible
+ * 
  * Each placed deck: { deck, x, y, orientedLength, orientedWidth }
  * where x,y are the top-left corner in inches from origin.
  */
-function tileRectangle(targetLengthIn, targetWidthIn) {
-  // Get available deck sizes (those with qty > 0 or that exist for sub-hire)
-  // We include all sizes for calculation — stock check happens after.
-  const availableDecks = STOCK.decks.filter(d => d.lengthIn > 0);
+function tileRectangle(targetLengthIn, targetWidthIn, inStockOnly) {
+  // Get available deck sizes
+  // If inStockOnly, filter to decks we actually own
+  const availableDecks = inStockOnly
+    ? STOCK.decks.filter(d => d.lengthIn > 0 && d.qty > 0)
+    : STOCK.decks.filter(d => d.lengthIn > 0);
+
+  if (availableDecks.length === 0) return null;
 
   // Generate all possible orientations (each deck can be rotated 90°)
   const orientations = [];
@@ -267,33 +294,25 @@ function fillRow(targetLength, orientations) {
  * Given a target dimension in inches, find the nearest achievable dimension
  * that can be built from our deck sizes (allowing both orientations).
  * Returns array of achievable dimensions near the target, sorted by proximity.
+ * 
+ * @param {number} targetIn - Target dimension in inches
+ * @param {boolean} inStockOnly - If true, only consider decks with qty > 0
  */
-function findNearestAchievable(targetIn) {
+function findNearestAchievable(targetIn, inStockOnly) {
   // All possible single-dimension lengths we can build from deck pieces
+  const decksToUse = inStockOnly
+    ? STOCK.decks.filter(d => d.qty > 0)
+    : STOCK.decks;
+
   const deckLengths = [...new Set(
-    STOCK.decks.flatMap(d => [d.lengthIn, d.widthIn])
+    decksToUse.flatMap(d => [d.lengthIn, d.widthIn])
   )].filter(l => l > 0).sort((a, b) => a - b);
+
+  if (deckLengths.length === 0) return [];
 
   // Generate all achievable lengths up to ~2x target (within reason)
   const maxLen = Math.max(targetIn * 1.5, 240); // At least 20ft
   const achievable = new Set();
-
-  // Brute force: try combinations of deck lengths that sum up
-  function buildLengths(remaining, maxPiece) {
-    if (remaining === 0) return;
-    for (const len of deckLengths) {
-      if (len > remaining) continue;
-      achievable.add(maxPiece !== undefined ? maxPiece - remaining + len : len);
-      // Keep going if we haven't exceeded max
-      if (remaining - len >= Math.min(...deckLengths)) {
-        // Add the total so far
-        const total = (maxPiece || 0) + len;
-        if (total <= maxLen) {
-          achievable.add(total);
-        }
-      }
-    }
-  }
 
   // Simpler approach: additive combinations
   // Start with base lengths
@@ -485,6 +504,109 @@ function matchLegs(legNeeds) {
 
 
 // ============================================================================
+// NEAREST STOCK HEIGHT SUGGESTIONS
+// When leg height doesn't match stock, find the nearest standard heights
+// above and below, considering combiner offset.
+// ============================================================================
+
+/**
+ * Find alternative standard stage heights that would use in-stock legs.
+ * Returns array of { stageHeightIn, legHeightIn, legName, direction }
+ * 
+ * @param {number} requestedHeightIn - The desired finished stage height
+ * @param {string} combinerMode - affects whether offset is applied
+ * @param {Array} junctions - to know if combiners are involved
+ */
+function findAlternativeHeights(requestedHeightIn, combinerMode, junctions) {
+  const alternatives = [];
+  const hasCombinerJunctions = junctions.some(j => j.type !== 'solo');
+  const usesCombinersAtAll = combinerMode !== 'none' && hasCombinerJunctions;
+
+  // For each standard leg height, calculate what stage height it produces
+  for (const leg of STOCK.legs) {
+    // Skip legs with zero stock
+    if (leg.qty === 0) continue;
+
+    // Without combiner: stage height = leg height
+    // With combiner: stage height = leg height + 6"
+    // We need to consider BOTH cases since a stage can have both types of junctions
+
+    // Case 1: This leg used directly (solo corners, or no-combiner mode)
+    const directStageHeight = leg.heightIn;
+
+    // Case 2: This leg used under a combiner
+    const combinerStageHeight = leg.heightIn + COMBINER_HEIGHT_OFFSET;
+
+    // For the current combiner mode, what stage heights are possible?
+    if (combinerMode === 'none') {
+      // All junctions use direct legs
+      if (directStageHeight !== requestedHeightIn) {
+        alternatives.push({
+          stageHeightIn: directStageHeight,
+          legHeightIn: leg.heightIn,
+          legName: leg.name,
+          legColour: leg.colour,
+          direction: directStageHeight < requestedHeightIn ? 'lower' : 'higher',
+          delta: Math.abs(directStageHeight - requestedHeightIn),
+        });
+      }
+    } else {
+      // Mixed: solo corners need direct legs, combiner junctions need shorter legs
+      // The stage height is determined by the combiner junctions (since solo corners
+      // also need to match). So stage height = combiner_leg + 6" = direct_leg.
+      // Both must equal the same finished height.
+      // 
+      // When combiners are in use:
+      //   - Combiner junctions: leg_height + 6" = stage_height → leg = stage - 6"
+      //   - Solo corners: leg_height = stage_height
+      // Both leg heights must exist in stock for a clean solution.
+      //
+      // But for suggestions, we suggest stage heights where AT LEAST
+      // the combiner legs match stock (the more numerous type).
+      // Solo corners can use the same direct height.
+
+      // Suggest based on combiner leg (the height that matters most)
+      if (combinerStageHeight !== requestedHeightIn) {
+        // Check if the solo-corner leg also exists in stock
+        const soloLeg = STOCK.legs.find(l => l.heightIn === combinerStageHeight);
+        const soloAvailable = soloLeg && soloLeg.qty > 0;
+
+        alternatives.push({
+          stageHeightIn: combinerStageHeight,
+          legHeightIn: leg.heightIn,
+          legName: leg.name,
+          legColour: leg.colour,
+          combinerLeg: true,
+          soloLegAvailable: soloAvailable,
+          soloLegName: soloLeg ? soloLeg.name : null,
+          direction: combinerStageHeight < requestedHeightIn ? 'lower' : 'higher',
+          delta: Math.abs(combinerStageHeight - requestedHeightIn),
+        });
+      }
+    }
+  }
+
+  // Sort by proximity to requested height
+  alternatives.sort((a, b) => a.delta - b.delta);
+
+  // Deduplicate by stage height (keep closest)
+  const seen = new Set();
+  const unique = [];
+  for (const alt of alternatives) {
+    if (!seen.has(alt.stageHeightIn)) {
+      seen.add(alt.stageHeightIn);
+      unique.push(alt);
+    }
+  }
+
+  // Return the nearest few (up to 4 — 2 below, 2 above)
+  const lower = unique.filter(a => a.direction === 'lower').slice(0, 2);
+  const higher = unique.filter(a => a.direction === 'higher').slice(0, 2);
+  return [...lower, ...higher].sort((a, b) => a.stageHeightIn - b.stageHeightIn);
+}
+
+
+// ============================================================================
 // COMPILE PARTS LIST
 // Aggregate everything into a clear, printable parts list.
 // ============================================================================
@@ -576,9 +698,9 @@ function compilePartsList(layout, hardware, legMatch) {
  * Run the full staging calculation.
  * 
  * @param {Object} params
- * @param {number} params.length - Desired length
- * @param {number} params.width - Desired width
- * @param {number} params.height - Desired finished height
+ * @param {number} params.length - Desired length (in the specified unit)
+ * @param {number} params.width - Desired width (in the specified unit)
+ * @param {number} params.height - Desired finished height (in the specified unit)
  * @param {string} params.unit - 'ft' or 'm'
  * @param {string} params.combinerMode - 'all' | 'interior-only' | 'none'
  * @returns {Object} Full calculation result
@@ -592,9 +714,9 @@ function calculate(params) {
   const targetWidthIn = toInches(width);
   const targetHeightIn = toInches(height);
 
-  // Find nearest achievable dimensions
-  const achievableLengths = findNearestAchievable(targetLengthIn);
-  const achievableWidths = findNearestAchievable(targetWidthIn);
+  // Find nearest achievable dimensions (allowing all decks)
+  const achievableLengths = findNearestAchievable(targetLengthIn, false);
+  const achievableWidths = findNearestAchievable(targetWidthIn, false);
 
   // Try exact first, then nearest
   let bestLength = achievableLengths[0];
@@ -606,16 +728,16 @@ function calculate(params) {
   if (exactLength) bestLength = exactLength;
   if (exactWidth) bestWidth = exactWidth;
 
-  // Tile the rectangle
-  const layout = tileRectangle(bestLength, bestWidth);
+  // Tile the rectangle (using all decks, including sub-hire)
+  const layout = tileRectangle(bestLength, bestWidth, false);
 
   if (!layout) {
     return {
       success: false,
       error: 'Could not tile these dimensions with available deck sizes.',
       suggestions: {
-        lengths: achievableLengths.slice(0, 5).map(l => ({ inches: l, display: formatDimension(l) })),
-        widths: achievableWidths.slice(0, 5).map(w => ({ inches: w, display: formatDimension(w) })),
+        lengths: achievableLengths.slice(0, 5).map(l => ({ inches: l, display: formatDimensionPrimary(l, unit) })),
+        widths: achievableWidths.slice(0, 5).map(w => ({ inches: w, display: formatDimensionPrimary(w, unit) })),
       },
     };
   }
@@ -649,23 +771,133 @@ function calculate(params) {
   // Dimension info
   const dimensionMatch = (bestLength === targetLengthIn && bestWidth === targetWidthIn);
 
+  // ----- ALTERNATIVE HEIGHT SUGGESTIONS -----
+  // Show alternatives when:
+  // 1. Legs are non-standard (screwjack needed)
+  // 2. Height was snapped to nearest standard (user might prefer another option)
+  const hasNonStandardLegs = legMatch.screwjackNeeded.length > 0;
+  const heightWasSnapped = !standardHeightMatch;
+  let heightAlternatives = [];
+  if (hasNonStandardLegs || heightWasSnapped) {
+    heightAlternatives = findAlternativeHeights(effectiveHeight, combinerMode, junctions);
+    // If height was snapped (but legs are standard), also include the effective height
+    // since the user might want to confirm that's the best option.
+    // Filter out the current effective height since it's already being used
+    heightAlternatives = heightAlternatives.filter(a => a.stageHeightIn !== effectiveHeight);
+  }
+
+  // ----- STOCK-CONSTRAINED DECK ALTERNATIVE -----
+  // If primary layout has deck shortfalls, try tiling with in-stock decks only
+  const hasDeckShortfall = partsList.some(p => p.category === 'Decks' && p.shortfall > 0);
+  let stockAlternativeLayout = null;
+  let stockAlternativeParts = null;
+
+  if (hasDeckShortfall) {
+    // Try tiling the same dimensions with only in-stock decks
+    const altLayout = tileRectangle(bestLength, bestWidth, true);
+    if (altLayout) {
+      // Check if this alternative actually avoids shortfalls
+      const altDeckCounts = {};
+      for (const placed of altLayout) {
+        const key = placed.deck.name;
+        altDeckCounts[key] = (altDeckCounts[key] || 0) + 1;
+      }
+      const altHasShortfall = Object.entries(altDeckCounts).some(([name, needed]) => {
+        const deck = STOCK.decks.find(d => d.name === name);
+        return deck && needed > deck.qty;
+      });
+
+      // Only show alternative if it's different AND reduces/eliminates shortfalls
+      const primaryDeckCounts = {};
+      for (const placed of layout) {
+        primaryDeckCounts[placed.deck.name] = (primaryDeckCounts[placed.deck.name] || 0) + 1;
+      }
+      const isDifferent = JSON.stringify(altDeckCounts) !== JSON.stringify(primaryDeckCounts);
+
+      if (isDifferent) {
+        stockAlternativeLayout = altLayout;
+        stockAlternativeParts = [];
+        for (const deck of STOCK.decks) {
+          const needed = altDeckCounts[deck.name] || 0;
+          if (needed > 0) {
+            stockAlternativeParts.push({
+              name: deck.name,
+              qtyNeeded: needed,
+              qtyOwned: deck.qty,
+              shortfall: Math.max(0, needed - deck.qty),
+              noShortfall: needed <= deck.qty,
+            });
+          }
+        }
+      }
+    }
+
+    // If same-dimension tiling with stock doesn't work or still has shortfalls,
+    // also try to find nearest dimensions achievable purely from stock
+    if (!stockAlternativeLayout) {
+      const stockLengths = findNearestAchievable(targetLengthIn, true);
+      const stockWidths = findNearestAchievable(targetWidthIn, true);
+
+      // Try a few nearby combinations
+      for (let li = 0; li < Math.min(3, stockLengths.length); li++) {
+        for (let wi = 0; wi < Math.min(3, stockWidths.length); wi++) {
+          const tryL = stockLengths[li];
+          const tryW = stockWidths[wi];
+          if (tryL === bestLength && tryW === bestWidth) continue; // Already tried
+          const tryLayout = tileRectangle(tryL, tryW, true);
+          if (tryLayout) {
+            const tryCounts = {};
+            for (const placed of tryLayout) {
+              tryCounts[placed.deck.name] = (tryCounts[placed.deck.name] || 0) + 1;
+            }
+            const tryHasShortfall = Object.entries(tryCounts).some(([name, needed]) => {
+              const deck = STOCK.decks.find(d => d.name === name);
+              return deck && needed > deck.qty;
+            });
+
+            if (!tryHasShortfall) {
+              stockAlternativeLayout = tryLayout;
+              stockAlternativeLayout._altDimensions = { lengthIn: tryL, widthIn: tryW };
+              stockAlternativeParts = [];
+              for (const deck of STOCK.decks) {
+                const needed = tryCounts[deck.name] || 0;
+                if (needed > 0) {
+                  stockAlternativeParts.push({
+                    name: deck.name,
+                    qtyNeeded: needed,
+                    qtyOwned: deck.qty,
+                    shortfall: 0,
+                    noShortfall: true,
+                  });
+                }
+              }
+              break;
+            }
+          }
+        }
+        if (stockAlternativeLayout) break;
+      }
+    }
+  }
+
   return {
     success: true,
     input: {
       requested: {
-        length: { value: length, unit, inches: targetLengthIn, display: formatDimension(targetLengthIn) },
-        width: { value: width, unit, inches: targetWidthIn, display: formatDimension(targetWidthIn) },
-        height: { value: height, unit, inches: targetHeightIn, display: formatDimension(targetHeightIn) },
+        length: { value: length, unit, inches: targetLengthIn, display: formatDimensionPrimary(targetLengthIn, unit) },
+        width: { value: width, unit, inches: targetWidthIn, display: formatDimensionPrimary(targetWidthIn, unit) },
+        height: { value: height, unit, inches: targetHeightIn, display: formatDimensionPrimary(targetHeightIn, unit) },
       },
       combinerMode,
+      unit,
     },
     result: {
-      actualLength: { inches: bestLength, display: formatDimension(bestLength) },
-      actualWidth: { inches: bestWidth, display: formatDimension(bestWidth) },
-      actualHeight: { inches: effectiveHeight, display: formatDimension(effectiveHeight) },
+      actualLength: { inches: bestLength, display: formatDimensionPrimary(bestLength, unit) },
+      actualWidth: { inches: bestWidth, display: formatDimensionPrimary(bestWidth, unit) },
+      actualHeight: { inches: effectiveHeight, display: formatDimensionPrimary(effectiveHeight, unit) },
       dimensionMatch,
       heightMatch: standardHeightMatch,
-      nearestLegHeight: !standardHeightMatch ? { inches: nearestLegHeight, display: formatDimension(nearestLegHeight) } : null,
+      nearestLegHeight: !standardHeightMatch ? { inches: nearestLegHeight, display: formatDimensionPrimary(nearestLegHeight, unit) } : null,
     },
     layout,
     junctions: {
@@ -673,10 +905,15 @@ function calculate(params) {
       solo: junctions.filter(j => j.type === 'solo').length,
       edge: junctions.filter(j => j.type === 'edge').length,
       interior: junctions.filter(j => j.type === 'interior').length,
+      all: junctions,
     },
     hardware,
     legMatch,
     partsList,
+    // New: height alternatives and stock-constrained deck alternatives
+    heightAlternatives,
+    stockAlternativeLayout,
+    stockAlternativeParts,
     summary: {
       totalDecks,
       hasShortfall,
@@ -696,6 +933,12 @@ function calculate(params) {
 
 // State
 let currentResult = null;
+let currentUnit = 'm';
+
+/** Get the current unit from the toggle pill */
+function getCurrentUnit() {
+  return currentUnit;
+}
 
 /** Initialize the page */
 document.addEventListener('DOMContentLoaded', () => {
@@ -711,42 +954,149 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Set up event listeners
   document.getElementById('calc-form').addEventListener('submit', handleCalculate);
-  document.getElementById('unit-toggle').addEventListener('change', handleUnitToggle);
 
-  // Set default values
-  document.getElementById('stage-length').value = '6';
-  document.getElementById('stage-width').value = '4';
-  document.getElementById('stage-height').value = '0.6';
-  document.getElementById('unit-toggle').value = 'm';
-  updatePlaceholders();
+  // Unit toggle pill buttons
+  const pillBtns = document.querySelectorAll('.unit-btn');
+  pillBtns.forEach(btn => {
+    btn.addEventListener('click', () => handleUnitToggle(btn.dataset.unit));
+  });
+
+  // Set default values (metric)
+  currentUnit = 'm';
+  document.getElementById('stage-length-m').value = '6';
+  document.getElementById('stage-width-m').value = '4';
+  document.getElementById('stage-height-m').value = '0.6';
+  syncFieldVisibility();
 });
 
-/** Handle unit toggle — update placeholders */
-function handleUnitToggle() {
-  updatePlaceholders();
+
+// ============================================================================
+// UNIT TOGGLE & AUTO-CONVERSION
+// ============================================================================
+
+/**
+ * Handle switching between metric and imperial.
+ * Reads current values, converts them, and populates the new fields.
+ */
+function handleUnitToggle(newUnit) {
+  if (newUnit === currentUnit) return;
+
+  const oldUnit = currentUnit;
+
+  // Read current values in inches (our universal intermediate)
+  const lengthIn = readDimensionInches('length', oldUnit);
+  const widthIn = readDimensionInches('width', oldUnit);
+  const heightIn = readDimensionInches('height', oldUnit);
+
+  // Update state and UI
+  currentUnit = newUnit;
+
+  // Update pill active state
+  document.querySelectorAll('.unit-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.unit === newUnit);
+  });
+
+  // Show/hide appropriate input fields
+  syncFieldVisibility();
+
+  // Write converted values into the new fields
+  if (lengthIn > 0) writeDimensionFromInches('length', lengthIn, newUnit);
+  if (widthIn > 0) writeDimensionFromInches('width', widthIn, newUnit);
+  if (heightIn > 0) writeDimensionFromInches('height', heightIn, newUnit);
 }
 
-function updatePlaceholders() {
-  const unit = document.getElementById('unit-toggle').value;
-  const suffix = unit === 'm' ? 'm' : 'ft';
-  document.getElementById('stage-length').placeholder = `Length (${suffix})`;
-  document.getElementById('stage-width').placeholder = `Width (${suffix})`;
-  document.getElementById('stage-height').placeholder = `Height (${suffix})`;
-
-  // Update labels
-  document.getElementById('length-label').textContent = `Length (${suffix})`;
-  document.getElementById('width-label').textContent = `Width (${suffix})`;
-  document.getElementById('height-label').textContent = `Height (${suffix})`;
+/**
+ * Read a dimension's current value and return it in inches.
+ * @param {string} dim - 'length' | 'width' | 'height'
+ * @param {string} unit - 'm' or 'ft'
+ */
+function readDimensionInches(dim, unit) {
+  if (unit === 'm') {
+    const val = parseFloat(document.getElementById(`stage-${dim}-m`).value);
+    return isNaN(val) ? 0 : metersToInches(val);
+  } else {
+    const ft = parseFloat(document.getElementById(`stage-${dim}-ft`).value) || 0;
+    const inches = parseFloat(document.getElementById(`stage-${dim}-in`).value) || 0;
+    return (ft * 12) + inches;
+  }
 }
+
+/**
+ * Write a value (in inches) into the appropriate fields for the given unit.
+ * @param {string} dim - 'length' | 'width' | 'height'
+ * @param {number} inches - Value in inches
+ * @param {string} unit - 'm' or 'ft'
+ */
+function writeDimensionFromInches(dim, inches, unit) {
+  if (unit === 'm') {
+    const meters = inches * 0.0254;
+    document.getElementById(`stage-${dim}-m`).value = meters.toFixed(2);
+  } else {
+    const ft = Math.floor(inches / 12);
+    const remainIn = Math.round(inches % 12);
+    document.getElementById(`stage-${dim}-ft`).value = ft || '';
+    document.getElementById(`stage-${dim}-in`).value = remainIn || '';
+  }
+}
+
+/** Show/hide metric vs imperial input fields */
+function syncFieldVisibility() {
+  const isMetric = currentUnit === 'm';
+  const dims = ['length', 'width', 'height'];
+
+  for (const dim of dims) {
+    const metricEl = document.getElementById(`${dim}-metric`);
+    const imperialEl = document.getElementById(`${dim}-imperial`);
+
+    if (isMetric) {
+      metricEl.classList.remove('hidden');
+      imperialEl.classList.add('hidden');
+      // Remove required from imperial, add to metric
+      document.getElementById(`stage-${dim}-m`).required = true;
+      document.getElementById(`stage-${dim}-ft`).required = false;
+      document.getElementById(`stage-${dim}-in`).required = false;
+    } else {
+      metricEl.classList.add('hidden');
+      imperialEl.classList.remove('hidden');
+      // Remove required from metric, add to imperial ft
+      document.getElementById(`stage-${dim}-m`).required = false;
+      document.getElementById(`stage-${dim}-ft`).required = true;
+      document.getElementById(`stage-${dim}-in`).required = false;
+    }
+  }
+}
+
+
+// ============================================================================
+// FORM SUBMISSION & CALCULATION
+// ============================================================================
 
 /** Handle form submission */
 function handleCalculate(e) {
   e.preventDefault();
 
-  const length = parseFloat(document.getElementById('stage-length').value);
-  const width = parseFloat(document.getElementById('stage-width').value);
-  const height = parseFloat(document.getElementById('stage-height').value);
-  const unit = document.getElementById('unit-toggle').value;
+  const unit = getCurrentUnit();
+  let length, width, height;
+
+  if (unit === 'm') {
+    length = parseFloat(document.getElementById('stage-length-m').value);
+    width = parseFloat(document.getElementById('stage-width-m').value);
+    height = parseFloat(document.getElementById('stage-height-m').value);
+  } else {
+    // Combine ft + in into decimal feet for the engine
+    const lFt = parseFloat(document.getElementById('stage-length-ft').value) || 0;
+    const lIn = parseFloat(document.getElementById('stage-length-in').value) || 0;
+    length = lFt + (lIn / 12);
+
+    const wFt = parseFloat(document.getElementById('stage-width-ft').value) || 0;
+    const wIn = parseFloat(document.getElementById('stage-width-in').value) || 0;
+    width = wFt + (wIn / 12);
+
+    const hFt = parseFloat(document.getElementById('stage-height-ft').value) || 0;
+    const hIn = parseFloat(document.getElementById('stage-height-in').value) || 0;
+    height = hFt + (hIn / 12);
+  }
+
   const combinerMode = document.getElementById('combiner-mode').value;
 
   // Validate
@@ -803,18 +1153,35 @@ function renderError(result) {
   resultsEl.innerHTML = html;
 }
 
-/** Apply a suggested dimension */
+/** Apply a suggested dimension (from error chips or alternative chips) */
 function applySuggestion(dim, inches) {
-  const unit = document.getElementById('unit-toggle').value;
-  const value = unit === 'm' ? (inches * 0.0254).toFixed(2) : (inches / 12).toFixed(1);
-  document.getElementById(dim === 'length' ? 'stage-length' : 'stage-width').value = value;
+  writeDimensionFromInches(dim, inches, getCurrentUnit());
   handleCalculate(new Event('submit'));
 }
+
+/** Apply a suggested height and recalculate */
+function applyHeightSuggestion(heightInches) {
+  writeDimensionFromInches('height', heightInches, getCurrentUnit());
+  handleCalculate(new Event('submit'));
+}
+
+/** Apply both length and width suggestions at once, then recalculate */
+function applyDimensionSuggestion(lengthInches, widthInches) {
+  writeDimensionFromInches('length', lengthInches, getCurrentUnit());
+  writeDimensionFromInches('width', widthInches, getCurrentUnit());
+  handleCalculate(new Event('submit'));
+}
+
+
+// ============================================================================
+// RENDER RESULTS
+// ============================================================================
 
 /** Render full results */
 function renderResults(result) {
   const resultsEl = document.getElementById('results');
   resultsEl.classList.remove('hidden');
+  const unit = result.input.unit;
 
   let html = '';
 
@@ -824,25 +1191,33 @@ function renderResults(result) {
     <div class="dim-grid">
       <div class="dim-item">
         <span class="dim-label">Length</span>
-        <span class="dim-value">${result.result.actualLength.display}</span>
+        <span class="dim-value">${formatDimensionForUnit(result.result.actualLength.inches, unit)}</span>
+        <span class="dim-secondary">${formatDimensionForUnit(result.result.actualLength.inches, unit === 'm' ? 'ft' : 'm')}</span>
         ${!result.result.dimensionMatch && result.result.actualLength.inches !== result.input.requested.length.inches
           ? `<span class="dim-adjusted">Adjusted from ${result.input.requested.length.display}</span>` : ''}
       </div>
       <div class="dim-item">
         <span class="dim-label">Width</span>
-        <span class="dim-value">${result.result.actualWidth.display}</span>
+        <span class="dim-value">${formatDimensionForUnit(result.result.actualWidth.inches, unit)}</span>
+        <span class="dim-secondary">${formatDimensionForUnit(result.result.actualWidth.inches, unit === 'm' ? 'ft' : 'm')}</span>
         ${!result.result.dimensionMatch && result.result.actualWidth.inches !== result.input.requested.width.inches
           ? `<span class="dim-adjusted">Adjusted from ${result.input.requested.width.display}</span>` : ''}
       </div>
       <div class="dim-item">
         <span class="dim-label">Height</span>
-        <span class="dim-value">${result.result.actualHeight.display}</span>
+        <span class="dim-value">${formatDimensionForUnit(result.result.actualHeight.inches, unit)}</span>
+        <span class="dim-secondary">${formatDimensionForUnit(result.result.actualHeight.inches, unit === 'm' ? 'ft' : 'm')}</span>
         ${result.result.nearestLegHeight
           ? `<span class="dim-adjusted">Snapped from ${result.input.requested.height.display} (nearest standard leg)</span>` : ''}
       </div>
       <div class="dim-item">
         <span class="dim-label">Area</span>
-        <span class="dim-value">${result.summary.area.sqFt.toFixed(1)} sq ft / ${result.summary.area.sqM.toFixed(1)} sq m</span>
+        <span class="dim-value">${unit === 'm'
+          ? `${result.summary.area.sqM.toFixed(1)} sq m`
+          : `${result.summary.area.sqFt.toFixed(1)} sq ft`}</span>
+        <span class="dim-secondary">${unit === 'm'
+          ? `${result.summary.area.sqFt.toFixed(1)} sq ft`
+          : `${result.summary.area.sqM.toFixed(1)} sq m`}</span>
       </div>
     </div>
   </div>`;
@@ -851,9 +1226,35 @@ function renderResults(result) {
   html += `<div class="result-card">
     <h2>Deck Layout <span class="badge">${result.summary.totalDecks} decks</span></h2>
     <div class="layout-visual-container">
-      ${renderLayoutVisual(result.layout, result.result.actualLength.inches, result.result.actualWidth.inches)}
-    </div>
-  </div>`;
+      ${renderLayoutVisual(result.layout, result.result.actualLength.inches, result.result.actualWidth.inches, unit)}
+    </div>`;
+
+  // Stock-constrained alternative deck layout (if any)
+  if (result.stockAlternativeParts) {
+    const altDims = result.stockAlternativeLayout._altDimensions;
+    const altLabel = altDims
+      ? `${formatDimensionForUnit(altDims.lengthIn, unit)} × ${formatDimensionForUnit(altDims.widthIn, unit)}`
+      : 'same dimensions';
+
+    html += `<div class="alt-section">
+      <h3>🟢 In-stock alternative (${altLabel}, ${result.stockAlternativeLayout.length} decks)</h3>
+      <div class="alt-deck-card">
+        <h4>Uses only decks you currently own:</h4>
+        <ul class="alt-deck-list">
+          ${result.stockAlternativeParts.map(p =>
+            `<li>${p.qtyNeeded}× ${p.name} (${p.qtyOwned} in stock${p.shortfall > 0 ? `, still short ${p.shortfall}` : ''})</li>`
+          ).join('')}
+        </ul>
+        ${altDims ? `<div style="margin-top:10px">
+          <button class="chip" onclick="applyDimensionSuggestion(${altDims.lengthIn}, ${altDims.widthIn})">
+            Recalculate at ${altLabel}
+          </button>
+        </div>` : ''}
+      </div>
+    </div>`;
+  }
+
+  html += `</div>`;
 
   // ----- JUNCTION SUMMARY -----
   html += `<div class="result-card">
@@ -914,7 +1315,35 @@ function renderResults(result) {
     </tr>`;
   }
 
-  html += `</tbody></table></div>`;
+  html += `</tbody></table>`;
+
+  // ----- ALTERNATIVE HEIGHT SUGGESTIONS (inside parts card) -----
+  if (result.heightAlternatives && result.heightAlternatives.length > 0) {
+    html += `<div class="alt-section">
+      <h3>📏 Nearest standard heights from stock</h3>
+      <p style="font-size:13px; color:#6b7280; margin-bottom:10px">
+        ${result.legMatch.screwjackNeeded.length > 0
+          ? 'The required leg height isn\'t standard. Here are the closest achievable stage heights using legs you own:'
+          : 'Your requested height was adjusted to the nearest standard leg. Other standard heights available:'}
+      </p>
+      <div class="alt-height-options">
+        ${result.heightAlternatives.map(alt => {
+          const label = formatDimensionForUnit(alt.stageHeightIn, unit);
+          const secondary = formatDimensionForUnit(alt.stageHeightIn, unit === 'm' ? 'ft' : 'm');
+          const arrow = alt.direction === 'lower' ? '↓' : '↑';
+          const legInfo = alt.combinerLeg
+            ? `${alt.legName} + combiner`
+            : alt.legName;
+          return `<button class="alt-height-chip" onclick="applyHeightSuggestion(${alt.stageHeightIn})">
+            <span class="alt-chip-label">${arrow} ${label}</span>
+            <span class="alt-chip-desc">${secondary} — ${legInfo}${alt.legColour ? ` (${alt.legColour})` : ''}</span>
+          </button>`;
+        }).join('')}
+      </div>
+    </div>`;
+  }
+
+  html += `</div>`;
 
   // ----- WARNINGS -----
   if (result.summary.warnings.length > 0) {
@@ -930,9 +1359,10 @@ function renderResults(result) {
 
 // ============================================================================
 // 2D LAYOUT VISUAL (SVG)
+// Now unit-aware — labels display in the selected unit
 // ============================================================================
 
-function renderLayoutVisual(layout, totalLength, totalWidth) {
+function renderLayoutVisual(layout, totalLength, totalWidth, unit) {
   const maxViewWidth = 600;
   const maxViewHeight = 300;
   const padding = 30;
@@ -979,20 +1409,20 @@ function renderLayoutVisual(layout, totalLength, totalWidth) {
     }
   }
 
-  // Dimension labels
-  const totalLengthFt = inchesToFeetStr(totalLength);
-  const totalWidthFt = inchesToFeetStr(totalWidth);
+  // Dimension labels — now unit-aware
+  const totalLengthLabel = formatDimensionForUnit(totalLength, unit);
+  const totalWidthLabel = formatDimensionForUnit(totalWidth, unit);
 
   // Top dimension line
   svgContent += `<text x="${svgWidth / 2}" y="${padding - 10}" 
     text-anchor="middle" font-size="13" fill="#374151" font-weight="600"
-    font-family="Inter, sans-serif">← ${totalLengthFt} →</text>`;
+    font-family="Inter, sans-serif">← ${totalLengthLabel} →</text>`;
 
   // Left dimension line
   svgContent += `<text x="${padding - 10}" y="${svgHeight / 2}" 
     text-anchor="middle" font-size="13" fill="#374151" font-weight="600"
     font-family="Inter, sans-serif"
-    transform="rotate(-90, ${padding - 10}, ${svgHeight / 2})">← ${totalWidthFt} →</text>`;
+    transform="rotate(-90, ${padding - 10}, ${svgHeight / 2})">← ${totalWidthLabel} →</text>`;
 
   return `<svg viewBox="0 0 ${svgWidth} ${svgHeight}" width="100%" 
     style="max-width:${svgWidth}px" xmlns="http://www.w3.org/2000/svg">
