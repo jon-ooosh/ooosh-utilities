@@ -103,8 +103,13 @@ function feetToInches(ft) {
 
 /** Convert inches to feet and inches string, e.g. "2' 6\"" */
 function inchesToFeetStr(inches) {
-  const ft = Math.floor(inches / 12);
-  const remainIn = Math.round(inches % 12);
+  let ft = Math.floor(inches / 12);
+  let remainIn = Math.round(inches % 12);
+  // Handle rounding up: if remainIn rounds to 12, carry to next foot
+  if (remainIn >= 12) {
+    ft += 1;
+    remainIn = 0;
+  }
   if (remainIn === 0) return `${ft}'`;
   if (ft === 0) return `${remainIn}"`;
   return `${ft}' ${remainIn}"`;
@@ -1030,10 +1035,20 @@ function readDimensionInches(dim, unit) {
 function writeDimensionFromInches(dim, inches, unit) {
   if (unit === 'm') {
     const meters = inches * 0.0254;
-    document.getElementById(`stage-${dim}-m`).value = meters.toFixed(2);
+    // Smart rounding: if within 1cm of a 5cm increment, snap to it.
+    // This prevents 5.99m when the user originally entered 6m and toggled units.
+    const rounded5cm = Math.round(meters * 20) / 20; // nearest 0.05m
+    const useSnapped = Math.abs(meters - rounded5cm) < 0.015; // within 1.5cm
+    const display = useSnapped ? rounded5cm.toFixed(2) : meters.toFixed(2);
+    document.getElementById(`stage-${dim}-m`).value = display;
   } else {
-    const ft = Math.floor(inches / 12);
-    const remainIn = Math.round(inches % 12);
+    let ft = Math.floor(inches / 12);
+    let remainIn = Math.round(inches % 12);
+    // Handle rounding up: if remainIn rounds to 12, carry to next foot
+    if (remainIn >= 12) {
+      ft += 1;
+      remainIn = 0;
+    }
     document.getElementById(`stage-${dim}-ft`).value = ft || '';
     document.getElementById(`stage-${dim}-in`).value = remainIn || '';
   }
