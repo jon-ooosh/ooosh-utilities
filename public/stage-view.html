@@ -3,7 +3,27 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Stage Configuration — OOOSH Tours</title>
+  <title>Stage Configuration — Ooosh Tours</title>
+
+  <!-- Favicon -->
+  <link rel="icon" href="/favicon.ico" type="image/x-icon">
+  <link rel="icon" href="/favicon-192.png" type="image/png" sizes="192x192">
+
+  <!-- Open Graph meta tags — makes shared links look nice in emails, WhatsApp, Slack etc -->
+  <meta property="og:title" content="Stage Configuration — Ooosh Tours">
+  <meta property="og:description" content="Interactive 3D stage layout preview. Rotate, zoom, and explore the proposed staging configuration.">
+  <meta property="og:type" content="website">
+  <meta property="og:image" content="https://ooosh-utilities.netlify.app/favicon-192.png">
+  <meta property="og:image:width" content="192">
+  <meta property="og:image:height" content="192">
+  <meta property="og:site_name" content="Ooosh Tours">
+
+  <!-- Twitter card (used by many apps as fallback) -->
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="Stage Configuration — Ooosh Tours">
+  <meta name="twitter:description" content="Interactive 3D stage layout preview from Ooosh Tours.">
+  <meta name="twitter:image" content="https://ooosh-utilities.netlify.app/favicon-192.png">
+
   <style>
     @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap');
 
@@ -39,14 +59,8 @@
     .brand-logo {
       width: 36px;
       height: 36px;
-      background: linear-gradient(135deg, #3b82f6 0%, #6366f1 100%);
       border-radius: 8px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-weight: 700;
-      font-size: 14px;
-      color: white;
+      object-fit: contain;
     }
     .brand-text {
       font-weight: 700;
@@ -214,9 +228,9 @@
   <!-- Top bar -->
   <div class="top-bar">
     <div class="brand">
-      <div class="brand-logo">O</div>
+      <img src="/favicon-192.png" alt="Ooosh Tours" class="brand-logo">
       <div>
-        <div class="brand-text">OOOSH Tours</div>
+        <div class="brand-text">Ooosh Tours</div>
         <div class="brand-sub">Stage Configuration</div>
       </div>
     </div>
@@ -238,23 +252,52 @@
   <!-- Three.js canvas -->
   <canvas id="stage-canvas"></canvas>
 
+  <!-- Pako for URL decompression (tiny — ~13KB gzipped) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"></script>
+
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
   <script>
     // ========================================================================
     // PARSE CONFIG FROM URL
+    // Supports two formats:
+    //   ?config={JSON}       — legacy (raw JSON, URL-encoded)
+    //   ?c={base64url}       — new (pako-compressed + base64url-encoded)
     // ========================================================================
 
     function parseConfig() {
       const params = new URLSearchParams(window.location.search);
-      const raw = params.get('config');
-      if (!raw) return null;
 
-      try {
-        return JSON.parse(decodeURIComponent(raw));
-      } catch (e) {
-        console.error('Failed to parse config:', e);
-        return null;
+      // Try new compressed format first (?c=)
+      const compressed = params.get('c');
+      if (compressed) {
+        try {
+          // Base64url → standard base64 → binary → pako inflate → JSON
+          const base64 = compressed.replace(/-/g, '+').replace(/_/g, '/');
+          const binary = atob(base64);
+          const bytes = new Uint8Array(binary.length);
+          for (let i = 0; i < binary.length; i++) {
+            bytes[i] = binary.charCodeAt(i);
+          }
+          const json = pako.inflate(bytes, { to: 'string' });
+          return JSON.parse(json);
+        } catch (e) {
+          console.error('Failed to decompress config:', e);
+          // Fall through to try legacy format
+        }
       }
+
+      // Legacy format (?config={JSON})
+      const raw = params.get('config');
+      if (raw) {
+        try {
+          return JSON.parse(decodeURIComponent(raw));
+        } catch (e) {
+          console.error('Failed to parse config:', e);
+          return null;
+        }
+      }
+
+      return null;
     }
 
     // ========================================================================
@@ -527,9 +570,6 @@
           }
         }
       }
-
-      // ── Dimension lines ──
-      // We skip complex 3D dimension lines and use the HTML panel instead
 
       // ── Orbit controls (manual implementation — r128 doesn't bundle OrbitControls) ──
       let isDragging = false;

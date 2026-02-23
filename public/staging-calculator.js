@@ -1342,6 +1342,8 @@ function recalculateAllStock() {
 
 /**
  * Build the URL for the 3D stage viewer with current layout data.
+ * Uses pako compression + base64url encoding for shorter URLs.
+ * Falls back to legacy ?config= format if pako isn't available.
  */
 function build3DViewUrl() {
   if (!currentResult || !currentResult.success) return null;
@@ -1365,6 +1367,25 @@ function build3DViewUrl() {
     u: unit,
   };
 
+  // Compress config using pako deflate + base64url encoding for shorter URLs
+  if (typeof pako !== 'undefined') {
+    try {
+      const json = JSON.stringify(config);
+      const compressed = pako.deflate(json);
+      // Convert Uint8Array to base64url (URL-safe base64 with no padding)
+      let binary = '';
+      for (let i = 0; i < compressed.length; i++) {
+        binary += String.fromCharCode(compressed[i]);
+      }
+      const base64 = btoa(binary)
+        .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+      return `${window.location.origin}/stage-view.html?c=${base64}`;
+    } catch (e) {
+      console.warn('Pako compression failed, using legacy URL format:', e);
+    }
+  }
+
+  // Fallback: legacy uncompressed format
   const encoded = encodeURIComponent(JSON.stringify(config));
   return `${window.location.origin}/stage-view.html?config=${encoded}`;
 }

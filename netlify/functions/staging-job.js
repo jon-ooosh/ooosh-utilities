@@ -68,9 +68,9 @@ exports.handler = async (event) => {
       throw new Error(`HireHop error code: ${data.error}`);
     }
 
-    // Extract dates — HireHop uses JOB_START and JOB_END fields
+    // Extract dates — HireHop uses JOB_DATE (start) and JOB_END (end)
     // Date format from API: "YYYY-MM-DD hh:mm:ss" (ISO 8601)
-    const startDate = data.JOB_START ? data.JOB_START.substring(0, 10) : null;
+    const startDate = data.JOB_DATE ? data.JOB_DATE.substring(0, 10) : null;
     const endDate = data.JOB_END ? data.JOB_END.substring(0, 10) : null;
 
     return {
