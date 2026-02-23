@@ -1,9 +1,13 @@
-/* ============================================
-   OOOSH Staging Calculator - Styles
-   Matches Staff Hub visual language
-   ============================================ */
+/**
+ * OOOSH Staging Calculator — Styles
+ * v2.0 — Adds loading/error states for live stock fetch
+ */
 
-* {
+/* ============================================================================
+   BASE & RESET
+   ============================================================================ */
+
+*, *::before, *::after {
   box-sizing: border-box;
   margin: 0;
   padding: 0;
@@ -11,202 +15,182 @@
 
 body {
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  background: linear-gradient(135deg, #e8f0fe 0%, #d4e4fc 100%);
-  min-height: 100vh;
-  padding: 20px;
-  color: #1a1a2e;
+  background: #f0f4f8;
+  color: #1e293b;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
 }
+
+
+/* ============================================================================
+   LAYOUT
+   ============================================================================ */
 
 .container {
-  max-width: 900px;
+  max-width: 960px;
   margin: 0 auto;
-  padding: 20px 0;
+  padding: 20px;
 }
 
-.hidden {
-  display: none !important;
-}
 
-/* ============================================
-   Header
-   ============================================ */
+/* ============================================================================
+   HEADER
+   ============================================================================ */
 
 .page-header {
-  margin-bottom: 20px;
+  margin-bottom: 24px;
 }
 
 .back-link {
-  display: inline-block;
-  font-size: 14px;
-  color: #5b9bd5;
+  color: #3b82f6;
   text-decoration: none;
+  font-size: 14px;
   font-weight: 500;
-  margin-bottom: 12px;
-  transition: color 0.2s;
 }
 
 .back-link:hover {
-  color: #3a7bb2;
+  text-decoration: underline;
 }
 
 .page-header h1 {
   font-size: 28px;
   font-weight: 700;
-  color: #1a1a2e;
-  margin-bottom: 6px;
+  margin: 8px 0 4px;
 }
 
 .subtitle {
-  color: #6b7280;
-  font-size: 14px;
+  color: #64748b;
+  font-size: 15px;
 }
 
-/* ============================================
-   Cards
-   ============================================ */
 
-.card {
-  background: white;
-  border-radius: 16px;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
-  padding: 28px;
-  margin-bottom: 16px;
-}
+/* ============================================================================
+   CARDS
+   ============================================================================ */
 
-.result-card {
-  background: white;
-  border-radius: 16px;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
-  padding: 24px;
-  margin-bottom: 16px;
-}
-
-.result-card h2 {
-  font-size: 17px;
-  font-weight: 700;
-  color: #1a1a2e;
-  margin-bottom: 16px;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.badge {
-  font-size: 12px;
-  font-weight: 600;
-  background: #dbeafe;
-  color: #2563eb;
-  padding: 3px 10px;
+.card, .result-card {
+  background: #fff;
   border-radius: 12px;
+  padding: 24px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  margin-bottom: 20px;
 }
 
-/* ============================================
-   Forms
-   ============================================ */
+
+/* ============================================================================
+   FORM LAYOUT
+   ============================================================================ */
 
 .form-row {
   display: flex;
-  gap: 16px;
   flex-wrap: wrap;
-  margin-bottom: 12px;
+  gap: 16px;
+  align-items: flex-end;
+  margin-bottom: 16px;
 }
 
 .form-row:last-child {
   margin-bottom: 0;
 }
 
-.form-group {
-  flex: 1;
-  min-width: 120px;
-}
-
 .form-group label {
   display: block;
   font-size: 13px;
   font-weight: 600;
-  color: #374151;
+  color: #475569;
   margin-bottom: 6px;
-}
-
-input[type="number"],
-select {
-  width: 100%;
-  padding: 10px 14px;
-  font-size: 15px;
-  border: 2px solid #e5e7eb;
-  border-radius: 10px;
-  transition: border-color 0.2s, box-shadow 0.2s;
-  font-family: inherit;
-  background: white;
-  color: #1a1a2e;
-}
-
-input:focus,
-select:focus {
-  outline: none;
-  border-color: #5b9bd5;
-  box-shadow: 0 0 0 3px rgba(91, 155, 213, 0.15);
 }
 
 .unit-group {
   flex: 0 0 auto;
-  min-width: auto;
 }
 
 .dim-group {
-  flex: 1;
-  min-width: 140px;
+  flex: 1 1 120px;
+  min-width: 120px;
 }
 
 .combiner-group {
-  flex: 2;
+  flex: 1 1 300px;
 }
 
 .btn-group {
-  flex: 0;
-  min-width: auto;
-  display: flex;
-  align-items: flex-end;
+  flex: 0 0 auto;
 }
 
-/* ============================================
-   Unit Toggle Pill
-   ============================================ */
+/* Input fields */
+input[type="number"],
+select {
+  width: 100%;
+  padding: 10px 14px;
+  border: 1.5px solid #e2e8f0;
+  border-radius: 8px;
+  font-size: 16px;
+  font-family: 'Inter', sans-serif;
+  color: #1e293b;
+  background: #fff;
+  transition: border-color 0.2s;
+}
+
+input[type="number"]:focus,
+select:focus {
+  outline: none;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+/* Remove number input spinners */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+input[type="number"] {
+  -moz-appearance: textfield;
+}
+
+
+/* ============================================================================
+   UNIT TOGGLE — Pill style
+   ============================================================================ */
 
 .unit-toggle-pill {
   display: inline-flex;
-  border: 2px solid #e5e7eb;
-  border-radius: 10px;
+  border: 1.5px solid #e2e8f0;
+  border-radius: 8px;
   overflow: hidden;
-  background: #f9fafb;
 }
 
 .unit-btn {
   padding: 9px 16px;
-  font-size: 14px;
-  font-weight: 600;
-  font-family: inherit;
   border: none;
-  background: transparent;
-  color: #6b7280;
+  background: #fff;
+  font-family: 'Inter', sans-serif;
+  font-size: 14px;
+  font-weight: 500;
+  color: #64748b;
   cursor: pointer;
   transition: all 0.2s;
-  white-space: nowrap;
+}
+
+.unit-btn:first-child {
+  border-right: 1.5px solid #e2e8f0;
 }
 
 .unit-btn.active {
-  background: #5b9bd5;
-  color: white;
+  background: #3b82f6;
+  color: #fff;
 }
 
-.unit-btn:not(.active):hover {
-  background: #e8f0fe;
-  color: #374151;
+.unit-btn:hover:not(.active) {
+  background: #f1f5f9;
 }
 
-/* ============================================
-   Imperial Dual Inputs (ft / in)
-   ============================================ */
+
+/* ============================================================================
+   IMPERIAL SPLIT INPUTS (ft / in)
+   ============================================================================ */
 
 .input-imperial {
   display: flex;
@@ -214,65 +198,122 @@ select:focus {
   gap: 4px;
 }
 
-.input-imperial input[type="number"] {
-  width: 70px;
+.input-imperial input {
   flex: 1;
   min-width: 50px;
-  padding: 10px 8px;
-  text-align: center;
 }
 
 .imperial-sep {
-  font-size: 16px;
-  font-weight: 600;
-  color: #9ca3af;
-  flex-shrink: 0;
+  font-size: 18px;
+  color: #94a3b8;
+  font-weight: 500;
   line-height: 1;
 }
 
-/* ============================================
-   Buttons
-   ============================================ */
+.hidden {
+  display: none !important;
+}
+
+
+/* ============================================================================
+   CALCULATE BUTTON
+   ============================================================================ */
 
 .btn-calculate {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
   padding: 10px 32px;
-  font-size: 15px;
-  font-weight: 700;
-  border-radius: 10px;
+  background: #3b82f6;
+  color: #fff;
   border: none;
+  border-radius: 8px;
+  font-size: 16px;
+  font-weight: 600;
+  font-family: 'Inter', sans-serif;
   cursor: pointer;
-  transition: all 0.2s;
-  font-family: inherit;
+  transition: background 0.2s;
   white-space: nowrap;
-  background: linear-gradient(135deg, #5b9bd5 0%, #4a8bc2 100%);
-  color: white;
 }
 
-.btn-calculate:hover {
-  background: linear-gradient(135deg, #4a8bc2 0%, #3a7bb2 100%);
-  transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(91, 155, 213, 0.3);
+.btn-calculate:hover:not(:disabled) {
+  background: #2563eb;
 }
 
-.btn-calculate:active {
-  transform: translateY(0);
+.btn-calculate:disabled {
+  background: #94a3b8;
+  cursor: not-allowed;
 }
 
-/* ============================================
-   Dimension Summary
-   ============================================ */
 
-.summary-card {
-  background: linear-gradient(135deg, #f0f5ff 0%, #e8f0fe 100%);
-  border: 2px solid #c3d9f7;
+/* ============================================================================
+   LOADING & ERROR STATES
+   ============================================================================ */
+
+.loading-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 20px;
+  background: #f0f9ff;
+  border: 1px solid #bae6fd;
+  border-radius: 10px;
+  color: #0369a1;
+  font-weight: 500;
+}
+
+.loading-spinner {
+  width: 22px;
+  height: 22px;
+  border: 3px solid #bae6fd;
+  border-top-color: #0369a1;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.error-banner {
+  padding: 20px;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 10px;
+  color: #991b1b;
+}
+
+.error-banner strong {
+  display: block;
+  margin-bottom: 6px;
+}
+
+.error-banner p {
+  font-size: 14px;
+  color: #b91c1c;
+}
+
+.info-banner {
+  padding: 14px 20px;
+  background: #f0f9ff;
+  border: 1px solid #bae6fd;
+  border-radius: 10px;
+  color: #0369a1;
+  font-size: 14px;
+  margin-bottom: 20px;
+}
+
+
+/* ============================================================================
+   DIMENSION SUMMARY (Stage Configuration)
+   ============================================================================ */
+
+.summary-card h2 {
+  font-size: 18px;
+  font-weight: 700;
+  margin-bottom: 16px;
 }
 
 .dim-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
   gap: 16px;
 }
 
@@ -282,56 +323,88 @@ select:focus {
 }
 
 .dim-label {
-  font-size: 12px;
-  font-weight: 600;
+  font-size: 11px;
+  font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.5px;
-  color: #6b7280;
+  letter-spacing: 0.05em;
+  color: #64748b;
   margin-bottom: 2px;
 }
 
 .dim-value {
-  font-size: 18px;
+  font-size: 22px;
   font-weight: 700;
-  color: #1a1a2e;
+  color: #1e293b;
 }
 
 .dim-secondary {
   font-size: 13px;
-  color: #6b7280;
-  margin-top: 1px;
+  color: #94a3b8;
 }
 
 .dim-adjusted {
   font-size: 12px;
   color: #f59e0b;
-  font-weight: 500;
+  font-style: italic;
   margin-top: 2px;
 }
 
-/* ============================================
-   Layout Visual
-   ============================================ */
+
+/* ============================================================================
+   BADGES & CHIPS
+   ============================================================================ */
+
+.badge {
+  display: inline-block;
+  padding: 2px 10px;
+  background: #e2e8f0;
+  border-radius: 100px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #475569;
+  vertical-align: middle;
+}
+
+.chip {
+  display: inline-block;
+  padding: 8px 16px;
+  background: #e2e8f0;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  font-size: 14px;
+  font-family: 'Inter', sans-serif;
+  color: #334155;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.chip:hover {
+  background: #3b82f6;
+  color: #fff;
+  border-color: #3b82f6;
+}
+
+
+/* ============================================================================
+   LAYOUT VISUAL (SVG container)
+   ============================================================================ */
 
 .layout-visual-container {
-  display: flex;
-  justify-content: center;
+  margin: 16px 0;
+  text-align: center;
   overflow-x: auto;
-  padding: 8px 0;
 }
 
-.layout-visual-container svg {
-  display: block;
-}
 
-/* ============================================
-   Junction Summary
-   ============================================ */
+/* ============================================================================
+   JUNCTION SUMMARY
+   ============================================================================ */
 
 .junction-summary {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  margin-top: 12px;
 }
 
 .junction-type {
@@ -342,94 +415,200 @@ select:focus {
 }
 
 .junction-dot {
-  width: 14px;
-  height: 14px;
+  width: 12px;
+  height: 12px;
   border-radius: 50%;
   flex-shrink: 0;
 }
 
-.junction-dot.solo     { background: #22c55e; }
-.junction-dot.edge     { background: #f59e0b; }
+.junction-dot.solo { background: #22c55e; }
+.junction-dot.edge { background: #f59e0b; }
 .junction-dot.interior { background: #3b82f6; }
 
 .junction-desc {
-  color: #6b7280;
+  color: #94a3b8;
   font-size: 13px;
   margin-left: auto;
 }
 
-/* ============================================
-   Parts Table
-   ============================================ */
+
+/* ============================================================================
+   PARTS TABLE
+   ============================================================================ */
 
 .parts-table {
   width: 100%;
   border-collapse: collapse;
+  margin-top: 12px;
   font-size: 14px;
 }
 
-.parts-table thead th {
+.parts-table th {
   text-align: left;
-  padding: 10px 12px;
+  padding: 8px 12px;
   font-size: 12px;
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.5px;
-  color: #6b7280;
-  border-bottom: 2px solid #e5e7eb;
-}
-
-.parts-table tbody tr {
-  border-bottom: 1px solid #f3f4f6;
-}
-
-.parts-table tbody tr:hover {
-  background: #f9fafb;
+  letter-spacing: 0.05em;
+  color: #64748b;
+  border-bottom: 2px solid #e2e8f0;
 }
 
 .parts-table td {
   padding: 10px 12px;
-  vertical-align: middle;
+  border-bottom: 1px solid #f1f5f9;
 }
 
 .parts-table .num {
   text-align: center;
   font-weight: 600;
-  font-variant-numeric: tabular-nums;
 }
 
 .parts-table .note {
-  font-size: 12px;
-  color: #6b7280;
+  font-size: 13px;
+  color: #64748b;
 }
 
 .category-row td {
   font-size: 12px;
   font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.5px;
-  color: #5b9bd5;
-  padding: 14px 12px 6px !important;
-  border-bottom: none !important;
-  background: none !important;
+  letter-spacing: 0.05em;
+  color: #3b82f6;
+  padding-top: 16px;
+  border-bottom: none;
 }
 
-/* Status colours */
-.status-ok    { color: #059669; font-weight: 600; }
-.status-tight { color: #d97706; font-weight: 600; }
+.status-ok { color: #16a34a; font-weight: 600; }
+.status-tight { color: #f59e0b; font-weight: 600; }
 .status-short { color: #dc2626; font-weight: 600; }
 
-/* ============================================
-   Warnings
-   ============================================ */
+
+/* ============================================================================
+   ALTERNATIVE SECTIONS — Heights & Stock alternatives
+   ============================================================================ */
+
+.alt-section {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1.5px dashed #e2e8f0;
+}
+
+.alt-section h3 {
+  font-size: 15px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+/* Height suggestion chips */
+.alt-height-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.alt-height-chip {
+  display: flex;
+  flex-direction: column;
+  padding: 10px 16px;
+  background: #f0fdf4;
+  border: 1.5px solid #86efac;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all 0.15s;
+  text-align: left;
+  font-family: 'Inter', sans-serif;
+}
+
+.alt-height-chip:hover {
+  background: #dcfce7;
+  border-color: #22c55e;
+}
+
+.alt-chip-label {
+  font-size: 15px;
+  font-weight: 700;
+  color: #166534;
+}
+
+.alt-chip-desc {
+  font-size: 12px;
+  color: #4ade80;
+  margin-top: 2px;
+}
+
+/* Stock alternative deck card */
+.alt-deck-card {
+  padding: 14px 18px;
+  background: #f0fdf4;
+  border: 1.5px solid #86efac;
+  border-radius: 10px;
+  margin-top: 8px;
+}
+
+.alt-deck-card h4 {
+  font-size: 14px;
+  font-weight: 600;
+  color: #166534;
+  margin-bottom: 8px;
+}
+
+.alt-deck-list {
+  list-style: none;
+  padding: 0;
+}
+
+.alt-deck-list li {
+  font-size: 14px;
+  padding: 3px 0;
+  color: #15803d;
+}
+
+.alt-deck-list li::before {
+  content: '✓ ';
+  color: #22c55e;
+  font-weight: 700;
+}
+
+
+/* ============================================================================
+   SUGGESTIONS CARD (for impossible dimensions)
+   ============================================================================ */
+
+.suggestions-card {
+  background: #fff;
+  border-radius: 12px;
+  padding: 24px;
+  margin-top: 16px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+.suggestions-card h3 {
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 10px;
+  color: #334155;
+}
+
+.suggestion-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+
+/* ============================================================================
+   WARNINGS
+   ============================================================================ */
 
 .warnings-card {
-  background: #fef3c7;
-  border: 2px solid #f59e0b;
+  border-left: 4px solid #f59e0b;
 }
 
 .warnings-card h2 {
-  color: #92400e;
+  font-size: 16px;
+  margin-bottom: 10px;
 }
 
 .warnings-card ul {
@@ -440,169 +619,17 @@ select:focus {
 .warnings-card li {
   padding: 6px 0;
   font-size: 14px;
-  color: #78350f;
+  color: #92400e;
 }
 
-/* ============================================
-   Error / Suggestions
-   ============================================ */
 
-.error-banner {
-  background: #fef2f2;
-  border: 2px solid #fca5a5;
-  border-radius: 12px;
-  padding: 20px;
-  margin-bottom: 16px;
-  color: #991b1b;
-}
-
-.error-banner strong {
-  display: block;
-  margin-bottom: 4px;
-}
-
-.suggestions-card {
-  background: white;
-  border-radius: 16px;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
-  padding: 24px;
-}
-
-.suggestions-card h3 {
-  font-size: 14px;
-  font-weight: 600;
-  color: #374151;
-  margin-bottom: 8px;
-  margin-top: 12px;
-}
-
-.suggestions-card h3:first-child {
-  margin-top: 0;
-}
-
-.suggestion-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.chip {
-  padding: 6px 14px;
-  font-size: 13px;
-  font-weight: 500;
-  border: 2px solid #dbeafe;
-  background: #f0f5ff;
-  color: #2563eb;
-  border-radius: 20px;
-  cursor: pointer;
-  font-family: inherit;
-  transition: all 0.2s;
-}
-
-.chip:hover {
-  background: #dbeafe;
-  border-color: #93c5fd;
-}
-
-/* ============================================
-   Stock Alternatives Section
-   ============================================ */
-
-.alt-section {
-  margin-top: 16px;
-  padding-top: 16px;
-  border-top: 2px dashed #e5e7eb;
-}
-
-.alt-section h3 {
-  font-size: 14px;
-  font-weight: 700;
-  color: #374151;
-  margin-bottom: 10px;
-}
-
-.alt-height-options {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 8px;
-}
-
-.alt-height-chip {
-  padding: 8px 16px;
-  font-size: 13px;
-  font-weight: 500;
-  border: 2px solid #dcfce7;
-  background: #f0fdf4;
-  color: #15803d;
-  border-radius: 10px;
-  cursor: pointer;
-  font-family: inherit;
-  transition: all 0.2s;
-  line-height: 1.3;
-}
-
-.alt-height-chip:hover {
-  background: #dcfce7;
-  border-color: #86efac;
-}
-
-.alt-height-chip .alt-chip-label {
-  display: block;
-  font-weight: 700;
-  font-size: 14px;
-}
-
-.alt-height-chip .alt-chip-desc {
-  display: block;
-  font-size: 11px;
-  color: #4ade80;
-  margin-top: 2px;
-}
-
-.alt-deck-card {
-  background: #f0fdf4;
-  border: 2px solid #bbf7d0;
-  border-radius: 12px;
-  padding: 16px;
-  margin-top: 12px;
-}
-
-.alt-deck-card h4 {
-  font-size: 13px;
-  font-weight: 700;
-  color: #15803d;
-  margin-bottom: 8px;
-}
-
-.alt-deck-list {
-  list-style: none;
-  padding: 0;
-  font-size: 13px;
-  color: #374151;
-}
-
-.alt-deck-list li {
-  padding: 3px 0;
-}
-
-.alt-deck-list li::before {
-  content: '✓ ';
-  color: #22c55e;
-  font-weight: 700;
-}
-
-/* ============================================
-   Responsive
-   ============================================ */
+/* ============================================================================
+   RESPONSIVE
+   ============================================================================ */
 
 @media (max-width: 640px) {
-  body {
+  .container {
     padding: 12px;
-  }
-
-  .card {
-    padding: 20px;
   }
 
   .form-row {
@@ -610,21 +637,8 @@ select:focus {
     gap: 12px;
   }
 
-  .form-group {
-    min-width: 100%;
-  }
-
-  .dim-group {
-    min-width: 100%;
-  }
-
-  .unit-group,
-  .combiner-group {
-    flex: 1;
-  }
-
-  .btn-group {
-    flex: 1;
+  .dim-group, .combiner-group {
+    flex-basis: 100%;
   }
 
   .btn-calculate {
@@ -635,21 +649,16 @@ select:focus {
     grid-template-columns: 1fr 1fr;
   }
 
-  .junction-type {
-    flex-wrap: wrap;
-  }
-
   .junction-desc {
-    flex-basis: 100%;
-    margin-left: 24px;
+    display: none;
   }
 
   .parts-table {
     font-size: 13px;
   }
 
-  .parts-table td,
-  .parts-table th {
+  .parts-table th,
+  .parts-table td {
     padding: 8px 6px;
   }
 }

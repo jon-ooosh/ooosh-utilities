@@ -6,7 +6,7 @@
   <title>Staging Calculator — OOOSH Staff Hub</title>
   <link rel="icon" href="/favicon.ico" type="image/x-icon">
   <link rel="icon" href="/favicon-192.png" type="image/png" sizes="192x192">
-  <link rel="stylesheet" href="/staging-calculator.css?v=1.1">
+  <link rel="stylesheet" href="/staging-calculator.css?v=2.0">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -38,11 +38,9 @@
           <!-- Length -->
           <div class="form-group dim-group">
             <label id="length-label">Length</label>
-            <!-- Metric input (visible when m selected) -->
             <div class="input-metric" id="length-metric">
               <input type="number" id="stage-length-m" step="any" min="0.01" placeholder="m" required>
             </div>
-            <!-- Imperial inputs (visible when ft selected) -->
             <div class="input-imperial hidden" id="length-imperial">
               <input type="number" id="stage-length-ft" step="1" min="0" placeholder="ft">
               <span class="imperial-sep">'</span>
@@ -105,6 +103,6 @@
 
   </div>
 
-  <script src="/staging-calculator.js?v=1.1"></script>
+  <script src="/staging-calculator.js?v=2.0"></script>
 </body>
 </html>
