@@ -114,6 +114,47 @@ body {
   flex: 1 1 300px;
 }
 
+.job-row {
+  padding-bottom: 16px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.job-group {
+  flex: 0 0 200px;
+}
+
+.client-group {
+  flex: 1 1 200px;
+}
+
+.client-display {
+  padding: 10px 14px;
+  border: 1.5px solid #e2e8f0;
+  border-radius: 8px;
+  font-size: 16px;
+  background: #f8fafc;
+  color: #64748b;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+}
+
+.client-display.loaded {
+  color: #1e293b;
+  font-weight: 500;
+}
+
+.client-display .job-status {
+  margin-left: auto;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: #dbeafe;
+  color: #2563eb;
+}
+
 .btn-group {
   flex: 0 0 auto;
 }
@@ -121,6 +162,7 @@ body {
 /* Input fields */
 input[type="number"],
 input[type="date"],
+input[type="text"],
 select {
   width: 100%;
   padding: 10px 14px;
@@ -701,7 +743,7 @@ input[type="number"] {
     gap: 12px;
   }
 
-  .dim-group, .combiner-group, .date-group {
+  .dim-group, .combiner-group, .date-group, .job-group, .client-group {
     flex-basis: 100%;
   }
 

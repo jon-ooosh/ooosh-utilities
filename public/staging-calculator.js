@@ -900,22 +900,31 @@ function getAvailableQtyForPart(part) {
 // ============================================================================
 
 /**
- * Fetch job details from HireHop and auto-populate date fields.
- * Called when calculator is launched with ?job=XXXXX from Staff Hub.
+ * Fetch job details from HireHop and auto-populate date fields + client name.
+ * Called when calculator is launched with ?job=XXXXX from Staff Hub,
+ * or when user types a job number into the field.
  */
 async function fetchJobDates(jobId) {
+  const clientDisplay = document.getElementById('client-display');
+
   try {
+    // Show loading state
+    clientDisplay.textContent = 'Loading…';
+    clientDisplay.classList.remove('loaded');
     console.log(`Fetching dates for job ${jobId}...`);
+
     const response = await fetch(`/.netlify/functions/staging-job?job=${jobId}`);
 
     if (!response.ok) {
       console.warn(`Job fetch returned ${response.status}`);
+      clientDisplay.textContent = `Error (HTTP ${response.status})`;
       return;
     }
 
     const data = await response.json();
     if (!data.success || !data.job) {
       console.warn('Job fetch failed:', data.error);
+      clientDisplay.textContent = data.error || 'Job not found';
       return;
     }
 
@@ -929,17 +938,22 @@ async function fetchJobDates(jobId) {
       document.getElementById('avail-end').value = endDate;
     }
 
-    // Show a subtle indicator that dates were loaded from the job
-    if (startDate || endDate) {
-      const dateLabel = document.querySelector('.date-group label');
-      if (dateLabel) {
-        dateLabel.innerHTML = `Dates <span style="font-weight:400; color:#3b82f6">(Job ${jobId}${name ? ': ' + name : ''})</span>`;
-      }
+    // Populate client display
+    clientDisplay.classList.add('loaded');
+    clientDisplay.innerHTML = name
+      ? `${name}`
+      : `Job ${jobId}`;
+
+    // Update the dates label to show job reference
+    const dateLabel = document.querySelector('.date-group label');
+    if (dateLabel && (startDate || endDate)) {
+      dateLabel.innerHTML = `Dates <span style="font-weight:400; color:#3b82f6">(from Job ${jobId})</span>`;
     }
 
-    console.log(`Job ${jobId} dates loaded:`, { startDate, endDate, name });
+    console.log(`Job ${jobId} loaded:`, { startDate, endDate, name });
   } catch (err) {
     console.warn('Could not fetch job dates:', err);
+    clientDisplay.textContent = 'Could not load job';
     // Non-fatal — dates just won't be auto-populated
   }
 }
@@ -999,8 +1013,23 @@ document.addEventListener('DOMContentLoaded', async () => {
   const urlParams = new URLSearchParams(window.location.search);
   const jobId = urlParams.get('job');
   if (jobId) {
+    document.getElementById('job-number').value = jobId;
     fetchJobDates(jobId);
   }
+
+  // Listen for manual job number entry (fetch on blur or Enter)
+  const jobInput = document.getElementById('job-number');
+  jobInput.addEventListener('blur', () => {
+    const val = jobInput.value.trim();
+    if (val && /^\d+$/.test(val)) fetchJobDates(val);
+  });
+  jobInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      const val = jobInput.value.trim();
+      if (val && /^\d+$/.test(val)) fetchJobDates(val);
+    }
+  });
 });
 
 
