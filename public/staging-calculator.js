@@ -603,6 +603,7 @@ function calculate(params) {
             stockAlternativeParts.push({
               name: deck.name, qtyNeeded: needed, qtyOwned: deck.qty,
               shortfall: Math.max(0, needed - deck.qty), noShortfall: needed <= deck.qty,
+              hirehopId: deck.hirehopId || null,
             });
           }
         }
@@ -640,6 +641,7 @@ function calculate(params) {
                   stockAlternativeParts.push({
                     name: deck.name, qtyNeeded: needed, qtyOwned: deck.qty,
                     shortfall: 0, noShortfall: true,
+                    hirehopId: deck.hirehopId || null,
                   });
                 }
               }
@@ -894,6 +896,56 @@ function getAvailableQtyForPart(part) {
 
 
 // ============================================================================
+// JOB DATE AUTO-PULL — fetch hire dates from HireHop job
+// ============================================================================
+
+/**
+ * Fetch job details from HireHop and auto-populate date fields.
+ * Called when calculator is launched with ?job=XXXXX from Staff Hub.
+ */
+async function fetchJobDates(jobId) {
+  try {
+    console.log(`Fetching dates for job ${jobId}...`);
+    const response = await fetch(`/.netlify/functions/staging-job?job=${jobId}`);
+
+    if (!response.ok) {
+      console.warn(`Job fetch returned ${response.status}`);
+      return;
+    }
+
+    const data = await response.json();
+    if (!data.success || !data.job) {
+      console.warn('Job fetch failed:', data.error);
+      return;
+    }
+
+    const { startDate, endDate, name } = data.job;
+
+    // Populate date fields
+    if (startDate) {
+      document.getElementById('avail-start').value = startDate;
+    }
+    if (endDate) {
+      document.getElementById('avail-end').value = endDate;
+    }
+
+    // Show a subtle indicator that dates were loaded from the job
+    if (startDate || endDate) {
+      const dateLabel = document.querySelector('.date-group label');
+      if (dateLabel) {
+        dateLabel.innerHTML = `Dates <span style="font-weight:400; color:#3b82f6">(Job ${jobId}${name ? ': ' + name : ''})</span>`;
+      }
+    }
+
+    console.log(`Job ${jobId} dates loaded:`, { startDate, endDate, name });
+  } catch (err) {
+    console.warn('Could not fetch job dates:', err);
+    // Non-fatal — dates just won't be auto-populated
+  }
+}
+
+
+// ============================================================================
 // UI LOGIC
 // ============================================================================
 
@@ -942,6 +994,13 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('stage-width-m').value = '4';
   document.getElementById('stage-height-m').value = '0.6';
   syncFieldVisibility();
+
+  // Auto-pull job dates if job ID is in URL (from Staff Hub)
+  const urlParams = new URLSearchParams(window.location.search);
+  const jobId = urlParams.get('job');
+  if (jobId) {
+    fetchJobDates(jobId);
+  }
 });
 
 
@@ -1249,6 +1308,70 @@ function recalculateAllStock() {
 
 
 // ============================================================================
+// 3D CLIENT VIEW — generate shareable link
+// ============================================================================
+
+/**
+ * Build the URL for the 3D stage viewer with current layout data.
+ */
+function build3DViewUrl() {
+  if (!currentResult || !currentResult.success) return null;
+
+  const r = currentResult;
+  const unit = r.input.unit;
+
+  // Encode a compact config object into the URL
+  const config = {
+    // Dimensions in inches (internal unit)
+    l: r.result.actualLength.inches,
+    w: r.result.actualWidth.inches,
+    h: r.result.actualHeight.inches,
+    // Layout: array of [x, y, deckLengthIn, deckWidthIn]
+    d: r.layout.map(p => [p.x, p.y, p.orientedLength, p.orientedWidth]),
+    // Junction points for legs: [x, y, type]
+    j: r.junctions.all.map(j => [j.x, j.y, j.type]),
+    // Combiner mode
+    cm: r.input.combinerMode,
+    // Display unit
+    u: unit,
+  };
+
+  const encoded = encodeURIComponent(JSON.stringify(config));
+  return `${window.location.origin}/stage-view.html?config=${encoded}`;
+}
+
+/**
+ * Open the 3D view in a new tab.
+ */
+function open3DView() {
+  const url = build3DViewUrl();
+  if (url) {
+    window.open(url, '_blank');
+  }
+}
+
+/**
+ * Copy the 3D view link to clipboard.
+ */
+async function copy3DLink() {
+  const url = build3DViewUrl();
+  if (!url) return;
+
+  try {
+    await navigator.clipboard.writeText(url);
+    // Brief visual feedback
+    const btn = event.target;
+    const origText = btn.textContent;
+    btn.textContent = '✅ Copied!';
+    setTimeout(() => { btn.textContent = origText; }, 2000);
+  } catch (err) {
+    // Fallback for older browsers
+    prompt('Copy this link:', url);
+  }
+}
+
+
+// ============================================================================
 // RENDER RESULTS
 // ============================================================================
 
@@ -1329,11 +1452,15 @@ function renderResults(result) {
     html += `<div class="alt-section">
       <h3>🟢 In-stock alternative (${altLabel}, ${result.stockAlternativeLayout.length} decks)</h3>
       <div class="alt-deck-card">
-        <h4>Uses only decks you currently own:</h4>
+        <h4>Uses only decks you currently ${AVAILABILITY ? 'have available' : 'own'}:</h4>
         <ul class="alt-deck-list">
-          ${result.stockAlternativeParts.map(p =>
-            `<li>${p.qtyNeeded}× ${p.name} (${p.qtyOwned} in stock${p.shortfall > 0 ? `, still short ${p.shortfall}` : ''})</li>`
-          ).join('')}
+          ${result.stockAlternativeParts.map(p => {
+            const availQty = getAvailableQtyForPart(p);
+            const displayQty = availQty !== null ? availQty : p.qtyOwned;
+            const label = AVAILABILITY ? 'available' : 'in stock';
+            const effectiveShortfall = availQty !== null ? Math.max(0, p.qtyNeeded - availQty) : p.shortfall;
+            return `<li>${p.qtyNeeded}× ${p.name} (${displayQty} ${label}${effectiveShortfall > 0 ? `, still short ${effectiveShortfall}` : ''})</li>`;
+          }).join('')}
         </ul>
         <div style="margin-top:12px; display:flex; gap:8px; flex-wrap:wrap">
           <button class="btn btn-calculate" style="padding:8px 20px; font-size:14px" onclick="recalculateStockOnly()">
@@ -1346,6 +1473,17 @@ function renderResults(result) {
       </div>
     </div>`;
   }
+
+  // 3D View share button
+  html += `<div class="alt-section" style="text-align:center; padding-top:16px">
+    <button class="btn btn-calculate" style="padding:10px 24px; font-size:14px; background:linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%)"
+      onclick="open3DView()">
+      🎨 Open 3D Client View
+    </button>
+    <button class="chip" style="margin-left:8px" onclick="copy3DLink()">
+      📋 Copy share link
+    </button>
+  </div>`;
 
   html += `</div>`;
 
