@@ -1,6 +1,6 @@
 /**
  * OOOSH Staging Calculator — Styles
- * v2.0 — Adds loading/error states for live stock fetch
+ * v2.2 — Date range inputs, layout reorder
  */
 
 /* ============================================================================
@@ -120,6 +120,7 @@ body {
 
 /* Input fields */
 input[type="number"],
+input[type="date"],
 select {
   width: 100%;
   padding: 10px 14px;
@@ -133,6 +134,7 @@ select {
 }
 
 input[type="number"]:focus,
+input[type="date"]:focus,
 select:focus {
   outline: none;
   border-color: #3b82f6;
@@ -212,6 +214,59 @@ input[type="number"] {
 
 .hidden {
   display: none !important;
+}
+
+
+/* ============================================================================
+   DATE RANGE INPUTS
+   ============================================================================ */
+
+.date-group {
+  flex: 1 1 280px;
+}
+
+.date-range-inputs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.date-range-inputs input[type="date"] {
+  flex: 1;
+  min-width: 130px;
+  font-size: 14px;
+  padding: 9px 10px;
+}
+
+.date-sep {
+  font-size: 16px;
+  color: #94a3b8;
+  font-weight: 500;
+  flex-shrink: 0;
+}
+
+/* Availability badge in parts table */
+.avail-badge {
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.avail-badge.ok {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.avail-badge.tight {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.avail-badge.short {
+  background: #fee2e2;
+  color: #991b1b;
 }
 
 
@@ -646,7 +701,7 @@ input[type="number"] {
     gap: 12px;
   }
 
-  .dim-group, .combiner-group {
+  .dim-group, .combiner-group, .date-group {
     flex-basis: 100%;
   }
 

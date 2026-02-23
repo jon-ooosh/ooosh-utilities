@@ -6,7 +6,7 @@
   <title>Staging Calculator — OOOSH Staff Hub</title>
   <link rel="icon" href="/favicon.ico" type="image/x-icon">
   <link rel="icon" href="/favicon-192.png" type="image/png" sizes="192x192">
-  <link rel="stylesheet" href="/staging-calculator.css?v=2.1">
+  <link rel="stylesheet" href="/staging-calculator.css?v=2.2">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -90,6 +90,16 @@
             </select>
           </div>
 
+          <!-- Date Range (optional — for availability checking) -->
+          <div class="form-group date-group">
+            <label for="avail-start">Dates (optional)</label>
+            <div class="date-range-inputs">
+              <input type="date" id="avail-start" placeholder="Start">
+              <span class="date-sep">→</span>
+              <input type="date" id="avail-end" placeholder="End">
+            </div>
+          </div>
+
           <!-- Calculate Button -->
           <div class="form-group btn-group">
             <button type="submit" class="btn btn-calculate">Calculate</button>
@@ -103,6 +113,6 @@
 
   </div>
 
-  <script src="/staging-calculator.js?v=2.1"></script>
+  <script src="/staging-calculator.js?v=2.2"></script>
 </body>
 </html>

@@ -15,6 +15,7 @@
 
 let STOCK = null;          // Set by fetchStock()
 let LEG_HEIGHTS = [];      // Rebuilt after stock loads
+let AVAILABILITY = null;   // Set by fetchAvailability() — date-specific availability data
 
 // Combiner height offset in inches (physical constant — the combiner plate is 6" tall)
 const COMBINER_HEIGHT_OFFSET = 6;
@@ -464,6 +465,7 @@ function compilePartsList(layout, hardware, legMatch) {
         category: 'Decks', name: deck.name,
         qtyNeeded: needed, qtyOwned: deck.qty,
         shortfall: Math.max(0, needed - deck.qty), note: '',
+        hirehopId: deck.hirehopId || null,
       });
     }
   }
@@ -475,6 +477,7 @@ function compilePartsList(layout, hardware, legMatch) {
       category: 'Combiners', name: c.name,
       qtyNeeded: hardware.combinerNeeds.fourInOne, qtyOwned: c.qty,
       shortfall: Math.max(0, hardware.combinerNeeds.fourInOne - c.qty), note: '',
+      hirehopId: c.hirehopId || null,
     });
   }
   if (hardware.combinerNeeds.twoInOne > 0) {
@@ -483,6 +486,7 @@ function compilePartsList(layout, hardware, legMatch) {
       category: 'Combiners', name: c.name,
       qtyNeeded: hardware.combinerNeeds.twoInOne, qtyOwned: c.qty,
       shortfall: Math.max(0, hardware.combinerNeeds.twoInOne - c.qty), note: '',
+      hirehopId: c.hirehopId || null,
     });
   }
 
@@ -492,6 +496,7 @@ function compilePartsList(layout, hardware, legMatch) {
       category: 'Legs', name: m.leg.name,
       qtyNeeded: m.qtyNeeded, qtyOwned: m.leg.qty,
       shortfall: m.shortfall, note: m.leg.colour || '',
+      hirehopId: m.leg.hirehopId || null,
     });
   }
 
@@ -782,6 +787,113 @@ async function fetchStock() {
 
 
 // ============================================================================
+// AVAILABILITY FETCH — date-specific availability from HireHop API
+// ============================================================================
+
+/**
+ * Fetch date-based availability for all staging items.
+ * Calls the staging-availability Netlify function with item IDs and dates.
+ * Updates the global AVAILABILITY object.
+ * 
+ * @param {string} startDate - ISO date string (YYYY-MM-DD)
+ * @param {string} endDate - ISO date string (YYYY-MM-DD)
+ * @returns {boolean} true on success
+ */
+async function fetchAvailability(startDate, endDate) {
+  try {
+    // Collect all HireHop item IDs from STOCK
+    const items = [];
+
+    for (const deck of STOCK.decks) {
+      if (deck.hirehopId) items.push({ id: deck.hirehopId });
+    }
+    for (const leg of STOCK.legs) {
+      if (leg.hirehopId) items.push({ id: leg.hirehopId });
+    }
+    if (STOCK.combiners.twoInOne.hirehopId) {
+      items.push({ id: STOCK.combiners.twoInOne.hirehopId });
+    }
+    if (STOCK.combiners.fourInOne.hirehopId) {
+      items.push({ id: STOCK.combiners.fourInOne.hirehopId });
+    }
+    for (const sj of STOCK.screwjacks) {
+      if (sj.hirehopId) items.push({ id: sj.hirehopId });
+    }
+    for (const w of STOCK.wheels) {
+      if (w.hirehopId) items.push({ id: w.hirehopId });
+    }
+    for (const h of STOCK.handrails) {
+      if (h.hirehopId) items.push({ id: h.hirehopId });
+    }
+    for (const s of STOCK.steps) {
+      if (s.hirehopId) items.push({ id: s.hirehopId });
+    }
+
+    if (items.length === 0) {
+      console.warn('No HireHop IDs found in stock — cannot check availability');
+      return false;
+    }
+
+    console.log(`Fetching availability for ${items.length} items: ${startDate} to ${endDate}`);
+
+    const response = await fetch('/.netlify/functions/staging-availability', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items, startDate, endDate }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    const data = await response.json();
+    if (!data.success) {
+      throw new Error(data.error || 'Unknown error');
+    }
+
+    // Store availability data globally
+    AVAILABILITY = {
+      data: data.availability,      // Map of hirehopId → { stock, available, global }
+      startDate,
+      endDate,
+      timestamp: data.timestamp,
+    };
+
+    console.log('Availability loaded:', {
+      items: Object.keys(data.availability).length,
+      startDate,
+      endDate,
+    });
+
+    return true;
+  } catch (err) {
+    console.error('Failed to fetch availability:', err);
+    AVAILABILITY = null;
+    return false;
+  }
+}
+
+/**
+ * Look up the available quantity for a specific HireHop item ID.
+ * Returns null if no availability data loaded, otherwise the available count.
+ */
+function getAvailableQty(hirehopId) {
+  if (!AVAILABILITY || !AVAILABILITY.data || !hirehopId) return null;
+  const entry = AVAILABILITY.data[String(hirehopId)];
+  return entry ? entry.available : null;
+}
+
+/**
+ * Look up availability for a parts list entry.
+ * Uses the hirehopId stored in the part to find the availability.
+ */
+function getAvailableQtyForPart(part) {
+  if (!part.hirehopId) return null;
+  return getAvailableQty(part.hirehopId);
+}
+
+
+// ============================================================================
 // UI LOGIC
 // ============================================================================
 
@@ -960,7 +1072,7 @@ function syncFieldVisibility() {
 // FORM SUBMISSION & CALCULATION
 // ============================================================================
 
-function handleCalculate(e) {
+async function handleCalculate(e) {
   e.preventDefault();
 
   if (!STOCK) {
@@ -1000,6 +1112,30 @@ function handleCalculate(e) {
   currentResult = calculateBestOrientation({ length, width, height, unit, combinerMode });
 
   if (currentResult.success) {
+    // If dates are set, fetch availability before rendering
+    const startDate = document.getElementById('avail-start').value;
+    const endDate = document.getElementById('avail-end').value;
+
+    if (startDate) {
+      // Show a brief loading indicator
+      const resultsEl = document.getElementById('results');
+      resultsEl.classList.remove('hidden');
+      resultsEl.innerHTML = `<div class="loading-banner">
+        <div class="loading-spinner"></div>
+        <span>Checking availability for ${startDate}${endDate ? ' → ' + endDate : ''}…</span>
+      </div>`;
+
+      const availLoaded = await fetchAvailability(startDate, endDate || startDate);
+      if (!availLoaded) {
+        // Availability failed — render without it but show a warning
+        AVAILABILITY = null;
+        console.warn('Availability check failed — showing stock totals only');
+      }
+    } else {
+      // No dates — clear any previous availability data
+      AVAILABILITY = null;
+    }
+
     renderResults(currentResult);
   } else {
     renderError(currentResult);
@@ -1061,7 +1197,7 @@ function applyDimensionSuggestion(lengthInches, widthInches) {
  * Recalculate using only in-stock decks.
  * Called when user clicks "Use this layout" on the stock alternative card.
  */
-function recalculateStockOnly() {
+async function recalculateStockOnly() {
   if (!STOCK) return;
 
   const unit = getCurrentUnit();
@@ -1092,6 +1228,12 @@ function recalculateStockOnly() {
   });
 
   if (currentResult.success) {
+    // Re-fetch availability if dates are set (availability data may already be loaded)
+    const startDate = document.getElementById('avail-start').value;
+    const endDate = document.getElementById('avail-end').value;
+    if (startDate && !AVAILABILITY) {
+      await fetchAvailability(startDate, endDate || startDate);
+    }
     renderResults(currentResult);
   } else {
     renderError(currentResult);
@@ -1116,14 +1258,6 @@ function renderResults(result) {
   const unit = result.input.unit;
 
   let html = '';
-
-  // Stock-only mode banner
-  if (result.summary.inStockOnly) {
-    html += `<div class="info-banner stock-only-banner">
-      <strong>📦 Showing in-stock layout only</strong> — using only decks you currently have available.
-      <button class="chip" onclick="recalculateAllStock()" style="margin-left:10px">Show optimal layout</button>
-    </div>`;
-  }
 
   // Orientation swap notice
   if (result._orientationSwapped) {
@@ -1176,8 +1310,17 @@ function renderResults(result) {
       ${renderLayoutVisual(result.layout, result.result.actualLength.inches, result.result.actualWidth.inches, unit)}
     </div>`;
 
-  // Stock-constrained alternative
-  if (result.stockAlternativeParts) {
+  // Stock-only mode banner OR stock-constrained alternative (both live inside the Deck Layout card)
+  if (result.summary.inStockOnly) {
+    // Currently viewing in-stock layout — show banner with toggle back
+    html += `<div class="alt-section">
+      <div class="info-banner stock-only-banner">
+        <strong>📦 Showing in-stock layout only</strong> — using only decks you currently have available.
+        <button class="chip" onclick="recalculateAllStock()" style="margin-left:10px">Show optimal layout</button>
+      </div>
+    </div>`;
+  } else if (result.stockAlternativeParts) {
+    // Optimal layout has shortfalls — show in-stock alternative with "Use this layout" button
     const altDims = result.stockAlternativeLayout._altDimensions;
     const altLabel = altDims
       ? `${formatDimensionForUnit(altDims.lengthIn, unit)} × ${formatDimensionForUnit(altDims.widthIn, unit)}`
@@ -1206,34 +1349,32 @@ function renderResults(result) {
 
   html += `</div>`;
 
-  // Junction summary
-  html += `<div class="result-card">
-    <h2>Junction Points <span class="badge">${result.junctions.total} total</span></h2>
-    <div class="junction-summary">
-      <div class="junction-type">
-        <span class="junction-dot solo"></span>
-        <span>${result.junctions.solo} solo corners</span>
-        <span class="junction-desc">1 deck → 1 standard leg</span>
-      </div>
-      <div class="junction-type">
-        <span class="junction-dot edge"></span>
-        <span>${result.junctions.edge} edge junctions</span>
-        <span class="junction-desc">2 decks meet${result.input.combinerMode !== 'none' ? ' → 2-in-1 combiner' : ' → 2 separate legs'}</span>
-      </div>
-      <div class="junction-type">
-        <span class="junction-dot interior"></span>
-        <span>${result.junctions.interior} interior junctions</span>
-        <span class="junction-desc">4 decks meet${result.input.combinerMode !== 'none' ? ' → 4-in-1 combiner' : ' → 4 separate legs'}</span>
-      </div>
-    </div>
-  </div>`;
+  // Parts list (BEFORE junction points)
+  const hasAvailability = AVAILABILITY !== null;
+  const availDates = hasAvailability
+    ? `${AVAILABILITY.startDate}${AVAILABILITY.endDate && AVAILABILITY.endDate !== AVAILABILITY.startDate ? ' → ' + AVAILABILITY.endDate : ''}`
+    : '';
 
-  // Parts list
   html += `<div class="result-card">
-    <h2>Parts List</h2>
-    <table class="parts-table">
+    <h2>Parts List${hasAvailability ? ` <span class="badge">📅 ${availDates}</span>` : ''}</h2>`;
+
+  // Show availability info banner when dates are active
+  if (hasAvailability) {
+    html += `<div class="info-banner" style="margin-bottom:12px">
+      <strong>📅 Showing date-based availability</strong> — "Available" column shows what's not booked on ${availDates}.
+    </div>`;
+  }
+
+  html += `<table class="parts-table">
       <thead>
-        <tr><th>Item</th><th>Needed</th><th>In Stock</th><th>Status</th><th>Notes</th></tr>
+        <tr>
+          <th>Item</th>
+          <th>Needed</th>
+          <th>${hasAvailability ? 'Owned' : 'In Stock'}</th>
+          ${hasAvailability ? '<th>Available</th>' : ''}
+          <th>Status</th>
+          <th>Notes</th>
+        </tr>
       </thead>
       <tbody>`;
 
@@ -1241,19 +1382,37 @@ function renderResults(result) {
   for (const part of result.partsList) {
     if (part.category !== currentCategory) {
       currentCategory = part.category;
-      html += `<tr class="category-row"><td colspan="5">${currentCategory}</td></tr>`;
+      html += `<tr class="category-row"><td colspan="${hasAvailability ? 6 : 5}">${currentCategory}</td></tr>`;
     }
 
-    const statusClass = part.shortfall > 0 ? 'status-short' :
-      part.qtyNeeded <= part.qtyOwned * 0.8 ? 'status-ok' : 'status-tight';
-    const statusText = part.shortfall > 0 ? `Short ${part.shortfall}` :
-      part.qtyNeeded === part.qtyOwned ? 'Exact' : 'OK';
-    const statusIcon = part.shortfall > 0 ? '🔴' : part.qtyNeeded >= part.qtyOwned ? '🟡' : '🟢';
+    // Look up date-based availability for this item
+    const availQty = getAvailableQtyForPart(part);
+    const effectiveQty = availQty !== null ? availQty : part.qtyOwned;
+    const effectiveShortfall = Math.max(0, part.qtyNeeded - effectiveQty);
+
+    const statusClass = effectiveShortfall > 0 ? 'status-short' :
+      part.qtyNeeded <= effectiveQty * 0.8 ? 'status-ok' : 'status-tight';
+    const statusText = effectiveShortfall > 0 ? `Short ${effectiveShortfall}` :
+      part.qtyNeeded === effectiveQty ? 'Exact' : 'OK';
+    const statusIcon = effectiveShortfall > 0 ? '🔴' : part.qtyNeeded >= effectiveQty ? '🟡' : '🟢';
+
+    // Availability cell — show with colour coding
+    let availCell = '';
+    if (hasAvailability) {
+      if (availQty !== null) {
+        const availClass = availQty >= part.qtyNeeded ? 'ok' :
+          availQty > 0 ? 'tight' : 'short';
+        availCell = `<td class="num"><span class="avail-badge ${availClass}">${availQty}</span></td>`;
+      } else {
+        availCell = `<td class="num" style="color:#94a3b8">—</td>`;
+      }
+    }
 
     html += `<tr>
       <td>${part.name}</td>
       <td class="num">${part.qtyNeeded}</td>
       <td class="num">${part.qtyOwned}</td>
+      ${availCell}
       <td class="${statusClass}">${statusIcon} ${statusText}</td>
       <td class="note">${part.note}</td>
     </tr>`;
@@ -1261,7 +1420,7 @@ function renderResults(result) {
 
   html += `</tbody></table>`;
 
-  // Height alternatives
+  // Height alternatives (still inside the parts list card)
   if (result.heightAlternatives && result.heightAlternatives.length > 0) {
     html += `<div class="alt-section">
       <h3>📏 Nearest standard heights from stock</h3>
@@ -1286,6 +1445,28 @@ function renderResults(result) {
   }
 
   html += `</div>`;
+
+  // Junction summary (AFTER parts list)
+  html += `<div class="result-card">
+    <h2>Junction Points <span class="badge">${result.junctions.total} total</span></h2>
+    <div class="junction-summary">
+      <div class="junction-type">
+        <span class="junction-dot solo"></span>
+        <span>${result.junctions.solo} solo corners</span>
+        <span class="junction-desc">1 deck → 1 standard leg</span>
+      </div>
+      <div class="junction-type">
+        <span class="junction-dot edge"></span>
+        <span>${result.junctions.edge} edge junctions</span>
+        <span class="junction-desc">2 decks meet${result.input.combinerMode !== 'none' ? ' → 2-in-1 combiner' : ' → 2 separate legs'}</span>
+      </div>
+      <div class="junction-type">
+        <span class="junction-dot interior"></span>
+        <span>${result.junctions.interior} interior junctions</span>
+        <span class="junction-desc">4 decks meet${result.input.combinerMode !== 'none' ? ' → 4-in-1 combiner' : ' → 4 separate legs'}</span>
+      </div>
+    </div>
+  </div>`;
 
   // Warnings
   if (result.summary.warnings.length > 0) {
