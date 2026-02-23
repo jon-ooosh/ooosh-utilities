@@ -516,7 +516,7 @@ function compilePartsList(layout, hardware, legMatch) {
  * Run the full staging calculation for a single orientation.
  */
 function calculate(params) {
-  const { length, width, height, unit, combinerMode } = params;
+  const { length, width, height, unit, combinerMode, inStockOnly } = params;
 
   const toInches = unit === 'm' ? metersToInches : feetToInches;
   const targetLengthIn = toInches(length);
@@ -534,7 +534,7 @@ function calculate(params) {
   if (exactLength) bestLength = exactLength;
   if (exactWidth) bestWidth = exactWidth;
 
-  const layout = tileRectangle(bestLength, bestWidth, false);
+  const layout = tileRectangle(bestLength, bestWidth, inStockOnly || false);
 
   if (!layout) {
     return {
@@ -571,12 +571,12 @@ function calculate(params) {
     heightAlternatives = heightAlternatives.filter(a => a.stageHeightIn !== effectiveHeight);
   }
 
-  // Stock-constrained deck alternative
+  // Stock-constrained deck alternative (skip if already in stock-only mode)
   const hasDeckShortfall = partsList.some(p => p.category === 'Decks' && p.shortfall > 0);
   let stockAlternativeLayout = null;
   let stockAlternativeParts = null;
 
-  if (hasDeckShortfall) {
+  if (hasDeckShortfall && !inStockOnly) {
     const altLayout = tileRectangle(bestLength, bestWidth, true);
     if (altLayout) {
       const altDeckCounts = {};
@@ -689,6 +689,7 @@ function calculate(params) {
       totalParts,
       totalShortfall,
       hasShortfall,
+      inStockOnly: inStockOnly || false,
       warnings: hardware.warnings,
       area: {
         sqFt: (bestLength * bestWidth) / 144,
@@ -709,13 +710,13 @@ function calculate(params) {
  * "Better" = fewer shortfalls first, then fewer total parts.
  */
 function calculateBestOrientation(params) {
-  const { length, width, height, unit, combinerMode } = params;
+  const { length, width, height, unit, combinerMode, inStockOnly } = params;
 
   // Orientation A: as entered
-  const resultA = calculate({ length, width, height, unit, combinerMode });
+  const resultA = calculate({ length, width, height, unit, combinerMode, inStockOnly });
 
   // Orientation B: length and width swapped
-  const resultB = calculate({ length: width, width: length, height, unit, combinerMode });
+  const resultB = calculate({ length: width, width: length, height, unit, combinerMode, inStockOnly });
 
   // If one fails and the other succeeds, use the successful one
   if (!resultA.success && !resultB.success) return resultA;
@@ -1056,6 +1057,54 @@ function applyDimensionSuggestion(lengthInches, widthInches) {
   handleCalculate(new Event('submit'));
 }
 
+/**
+ * Recalculate using only in-stock decks.
+ * Called when user clicks "Use this layout" on the stock alternative card.
+ */
+function recalculateStockOnly() {
+  if (!STOCK) return;
+
+  const unit = getCurrentUnit();
+  let length, width, height;
+
+  if (unit === 'm') {
+    length = parseFloat(document.getElementById('stage-length-m').value);
+    width = parseFloat(document.getElementById('stage-width-m').value);
+    height = parseFloat(document.getElementById('stage-height-m').value);
+  } else {
+    const lFt = parseFloat(document.getElementById('stage-length-ft').value) || 0;
+    const lIn = parseFloat(document.getElementById('stage-length-in').value) || 0;
+    length = lFt + (lIn / 12);
+
+    const wFt = parseFloat(document.getElementById('stage-width-ft').value) || 0;
+    const wIn = parseFloat(document.getElementById('stage-width-in').value) || 0;
+    width = wFt + (wIn / 12);
+
+    const hFt = parseFloat(document.getElementById('stage-height-ft').value) || 0;
+    const hIn = parseFloat(document.getElementById('stage-height-in').value) || 0;
+    height = hFt + (hIn / 12);
+  }
+
+  const combinerMode = document.getElementById('combiner-mode').value;
+
+  currentResult = calculateBestOrientation({
+    length, width, height, unit, combinerMode, inStockOnly: true,
+  });
+
+  if (currentResult.success) {
+    renderResults(currentResult);
+  } else {
+    renderError(currentResult);
+  }
+}
+
+/**
+ * Switch back to showing all stock (not just in-stock).
+ */
+function recalculateAllStock() {
+  handleCalculate(new Event('submit'));
+}
+
 
 // ============================================================================
 // RENDER RESULTS
@@ -1067,6 +1116,14 @@ function renderResults(result) {
   const unit = result.input.unit;
 
   let html = '';
+
+  // Stock-only mode banner
+  if (result.summary.inStockOnly) {
+    html += `<div class="info-banner stock-only-banner">
+      <strong>📦 Showing in-stock layout only</strong> — using only decks you currently have available.
+      <button class="chip" onclick="recalculateAllStock()" style="margin-left:10px">Show optimal layout</button>
+    </div>`;
+  }
 
   // Orientation swap notice
   if (result._orientationSwapped) {
@@ -1135,11 +1192,14 @@ function renderResults(result) {
             `<li>${p.qtyNeeded}× ${p.name} (${p.qtyOwned} in stock${p.shortfall > 0 ? `, still short ${p.shortfall}` : ''})</li>`
           ).join('')}
         </ul>
-        ${altDims ? `<div style="margin-top:10px">
-          <button class="chip" onclick="applyDimensionSuggestion(${altDims.lengthIn}, ${altDims.widthIn})">
-            Recalculate at ${altLabel}
+        <div style="margin-top:12px; display:flex; gap:8px; flex-wrap:wrap">
+          <button class="btn btn-calculate" style="padding:8px 20px; font-size:14px" onclick="recalculateStockOnly()">
+            ✅ Use this layout
           </button>
-        </div>` : ''}
+          ${altDims ? `<button class="chip" onclick="applyDimensionSuggestion(${altDims.lengthIn}, ${altDims.widthIn})">
+            Recalculate at ${altLabel}
+          </button>` : ''}
+        </div>
       </div>
     </div>`;
   }
@@ -1301,4 +1361,4 @@ function renderLayoutVisual(layout, totalLength, totalWidth, unit) {
     style="max-width:${svgWidth}px" xmlns="http://www.w3.org/2000/svg">
     ${svgContent}
   </svg>`;
-} 
+}

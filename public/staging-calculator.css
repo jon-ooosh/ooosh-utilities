@@ -300,6 +300,15 @@ input[type="number"] {
   margin-bottom: 20px;
 }
 
+.stock-only-banner {
+  background: #f0fdf4;
+  border-color: #86efac;
+  color: #166534;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
 
 /* ============================================================================
    DIMENSION SUMMARY (Stage Configuration)
@@ -661,4 +670,4 @@ input[type="number"] {
   .parts-table td {
     padding: 8px 6px;
   }
-} 
+}
