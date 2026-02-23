@@ -6,11 +6,15 @@
  * parses item names to extract dimensions, and returns a structured
  * STOCK object matching the staging calculator's format.
  * 
+ * Includes a 10-minute in-memory cache to avoid hitting HireHop's
+ * rate limit (60 req/min). The cache persists as long as the Netlify
+ * Function container stays warm.
+ * 
  * Env vars required:
  *   HIREHOP_EXPORT_ID  - HireHop company export ID 
  *   HIREHOP_EXPORT_KEY - HireHop export key (secret)
  * 
- * Returns: { success, stock, raw, timestamp }
+ * Returns: { success, stock, raw, timestamp, cached }
  */
 
 const HIREHOP_EXPORT_URL = 'https://myhirehop.com/modules/stock/export_data.php';
@@ -53,6 +57,16 @@ const headers = {
 
 
 // ============================================================================
+// IN-MEMORY CACHE — survives between invocations while container is warm
+// ============================================================================
+
+const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+
+let cachedResponse = null;   // The last successful JSON response body
+let cachedAt = 0;            // Timestamp (ms) when cache was written
+
+
+// ============================================================================
 // MAIN HANDLER
 // ============================================================================
 
@@ -60,6 +74,17 @@ exports.handler = async (event) => {
   // Handle CORS preflight
   if (event.httpMethod === 'OPTIONS') {
     return { statusCode: 204, headers, body: '' };
+  }
+
+  // ── Check cache first ──
+  const now = Date.now();
+  if (cachedResponse && (now - cachedAt) < CACHE_TTL_MS) {
+    console.log(`Returning cached stock (age: ${Math.round((now - cachedAt) / 1000)}s)`);
+    return {
+      statusCode: 200,
+      headers,
+      body: cachedResponse,
+    };
   }
 
   const exportId = process.env.HIREHOP_EXPORT_ID;
@@ -94,22 +119,41 @@ exports.handler = async (event) => {
       steps: parseSteps(hardwareRaw),
     };
 
+    const responseBody = JSON.stringify({
+      success: true,
+      stock,
+      // Include raw item count for debugging
+      rawCounts: {
+        decks: decksRaw.length,
+        hardware: hardwareRaw.length,
+      },
+      timestamp: new Date().toISOString(),
+      cached: false,
+    });
+
+    // ── Write to cache ──
+    cachedResponse = responseBody;
+    cachedAt = Date.now();
+    console.log('Stock fetched from HireHop and cached');
+
     return {
       statusCode: 200,
       headers,
-      body: JSON.stringify({
-        success: true,
-        stock,
-        // Include raw item count for debugging
-        rawCounts: {
-          decks: decksRaw.length,
-          hardware: hardwareRaw.length,
-        },
-        timestamp: new Date().toISOString(),
-      }),
+      body: responseBody,
     };
   } catch (err) {
     console.error('Staging stock fetch error:', err);
+
+    // ── If fetch fails but we have stale cache, serve it rather than error ──
+    if (cachedResponse) {
+      console.log('HireHop fetch failed — returning stale cache as fallback');
+      return {
+        statusCode: 200,
+        headers,
+        body: cachedResponse,
+      };
+    }
+
     return {
       statusCode: 500,
       headers,
