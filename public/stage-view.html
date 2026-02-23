@@ -424,25 +424,32 @@
       scene.add(gridHelper);
 
       // ── Materials ──
-      // Deck surface — light plywood / birch appearance
+      // Deck surface — dark carpet-covered Litedeck top
       const deckTopMat = new THREE.MeshStandardMaterial({
-        color: 0xc8a882,
-        roughness: 0.7,
+        color: 0x1a1a1a,
+        roughness: 0.9,
         metalness: 0.0,
       });
 
-      // Deck sides — darker edge
+      // Deck edge — aluminium Litedeck truss frame
       const deckSideMat = new THREE.MeshStandardMaterial({
-        color: 0x8b7355,
-        roughness: 0.8,
-        metalness: 0.05,
+        color: 0x999999,
+        roughness: 0.35,
+        metalness: 0.7,
       });
 
       // Deck underside — dark aluminium frame
       const deckFrameMat = new THREE.MeshStandardMaterial({
-        color: 0x4a4a4a,
-        roughness: 0.5,
-        metalness: 0.6,
+        color: 0x666666,
+        roughness: 0.4,
+        metalness: 0.65,
+      });
+
+      // Truss diagonal material — slightly brighter aluminium
+      const trussMat = new THREE.MeshStandardMaterial({
+        color: 0xaaaaaa,
+        roughness: 0.3,
+        metalness: 0.75,
       });
 
       // Leg material — steel
@@ -459,53 +466,134 @@
         metalness: 0.7,
       });
 
-      // ── Build deck panels ──
-      const DECK_THICKNESS = 0.5 * SCALE;   // ~0.5" deck thickness in model units
+      // ── Build Litedeck panels ──
+      const DECK_THICKNESS = 0.5 * SCALE;   // ~0.5" deck surface thickness
       const GAP = 0.3 * SCALE;               // slight gap between decks
+      const TRUSS_H = 2.5 * SCALE;           // truss frame height below deck surface
+      const TRUSS_W = 0.4 * SCALE;           // truss tube thickness
+      const TRUSS_DIAG = 0.3 * SCALE;        // diagonal brace thickness
+
+      // Helper: add a truss rail (horizontal bar along an edge)
+      function addRail(px, py, pz, sx, sy, sz, mat) {
+        const geo = new THREE.BoxGeometry(sx, sy, sz);
+        const mesh = new THREE.Mesh(geo, mat || deckSideMat);
+        mesh.position.set(px, py, pz);
+        mesh.castShadow = true;
+        scene.add(mesh);
+      }
+
+      // Helper: add a diagonal brace between two points
+      function addDiagonal(x1, y1, z1, x2, y2, z2) {
+        const ddx = x2 - x1, ddy = y2 - y1, ddz = z2 - z1;
+        const length = Math.sqrt(ddx*ddx + ddy*ddy + ddz*ddz);
+        const geo = new THREE.BoxGeometry(TRUSS_DIAG, length, TRUSS_DIAG);
+        const mesh = new THREE.Mesh(geo, trussMat);
+        mesh.position.set((x1+x2)/2, (y1+y2)/2, (z1+z2)/2);
+        // Rotate to point from start to end
+        const dir = new THREE.Vector3(ddx, ddy, ddz).normalize();
+        const up = new THREE.Vector3(0, 1, 0);
+        const quat = new THREE.Quaternion().setFromUnitVectors(up, dir);
+        mesh.quaternion.copy(quat);
+        mesh.castShadow = true;
+        scene.add(mesh);
+      }
 
       for (const [dx, dy, dl, dw] of cfg.d) {
         const x = dx * SCALE;
         const z = dy * SCALE;
         const deckL = dl * SCALE - GAP;
         const deckW = dw * SCALE - GAP;
+        const cx = x + (deckL + GAP) / 2;    // deck center X
+        const cz = z + (deckW + GAP) / 2;    // deck center Z
 
-        // Top surface
+        // ── Dark carpet top surface ──
         const topGeo = new THREE.BoxGeometry(deckL, DECK_THICKNESS, deckW);
-
-        // Create a multi-material box: top/bottom and sides
         const materials = [
           deckSideMat,   // +X
           deckSideMat,   // -X
-          deckTopMat,    // +Y (top)
+          deckTopMat,    // +Y (top — dark carpet)
           deckFrameMat,  // -Y (bottom)
           deckSideMat,   // +Z
           deckSideMat,   // -Z
         ];
-
         const deckMesh = new THREE.Mesh(topGeo, materials);
-        deckMesh.position.set(
-          x + (deckL + GAP) / 2,
-          stageHeight - DECK_THICKNESS / 2,
-          z + (deckW + GAP) / 2
-        );
+        deckMesh.position.set(cx, stageHeight - DECK_THICKNESS / 2, cz);
         deckMesh.castShadow = true;
         deckMesh.receiveShadow = true;
         scene.add(deckMesh);
 
-        // Aluminium frame bars under each deck (cross-members)
+        // ── Litedeck truss edge frame ──
+        // Top and bottom horizontal rails along each edge, plus diagonal braces
+        const trussTop = stageHeight - DECK_THICKNESS;
+        const trussBot = trussTop - TRUSS_H;
+        const trussRailMid = trussBot + TRUSS_H / 2;
+
+        // Four edges: front (+Z), back (-Z), left (-X), right (+X)
+        const halfL = deckL / 2;
+        const halfW = deckW / 2;
+
+        // Edge definitions: [startX, startZ, endX, endZ, lengthDir, isLongEdge]
+        const edges = [
+          // Front edge (+Z side)
+          { pos: [cx, trussRailMid, cz + halfW], len: deckL, thick: TRUSS_W, isX: true },
+          // Back edge (-Z side)
+          { pos: [cx, trussRailMid, cz - halfW], len: deckL, thick: TRUSS_W, isX: true },
+          // Right edge (+X side)
+          { pos: [cx + halfL, trussRailMid, cz], len: deckW, thick: TRUSS_W, isX: false },
+          // Left edge (-X side)
+          { pos: [cx - halfL, trussRailMid, cz], len: deckW, thick: TRUSS_W, isX: false },
+        ];
+
+        for (const edge of edges) {
+          const [ex, ey, ez] = edge.pos;
+
+          // Top rail (just under deck surface)
+          if (edge.isX) {
+            addRail(ex, trussTop - TRUSS_W/2, ez, edge.len, TRUSS_W, TRUSS_W);
+            addRail(ex, trussBot + TRUSS_W/2, ez, edge.len, TRUSS_W, TRUSS_W);
+          } else {
+            addRail(ex, trussTop - TRUSS_W/2, ez, TRUSS_W, TRUSS_W, edge.len);
+            addRail(ex, trussBot + TRUSS_W/2, ez, TRUSS_W, TRUSS_W, edge.len);
+          }
+
+          // Diagonal V-braces (triangular truss pattern)
+          const segments = Math.max(2, Math.round(edge.len / (4 * SCALE)));
+          const segLen = edge.len / segments;
+
+          for (let i = 0; i < segments; i++) {
+            const t0 = -edge.len/2 + i * segLen;
+            const tMid = t0 + segLen / 2;
+            const t1 = t0 + segLen;
+
+            if (edge.isX) {
+              // V-brace: top-left → bottom-mid → top-right
+              addDiagonal(ex + t0, trussTop - TRUSS_W, ez, ex + tMid, trussBot + TRUSS_W, ez);
+              addDiagonal(ex + tMid, trussBot + TRUSS_W, ez, ex + t1, trussTop - TRUSS_W, ez);
+            } else {
+              addDiagonal(ex, trussTop - TRUSS_W, ez + t0, ex, trussBot + TRUSS_W, ez + tMid);
+              addDiagonal(ex, trussBot + TRUSS_W, ez + tMid, ex, trussTop - TRUSS_W, ez + t1);
+            }
+          }
+
+          // Vertical end posts at each edge corner
+          if (edge.isX) {
+            addRail(ex - halfL, ey, ez, TRUSS_W, TRUSS_H, TRUSS_W);
+            addRail(ex + halfL, ey, ez, TRUSS_W, TRUSS_H, TRUSS_W);
+          } else {
+            addRail(ex, ey, ez - edge.len/2, TRUSS_W, TRUSS_H, TRUSS_W);
+            addRail(ex, ey, ez + edge.len/2, TRUSS_W, TRUSS_H, TRUSS_W);
+          }
+        }
+
+        // ── Aluminium cross-members under deck (internal frame) ──
         const FRAME_H = 1.5 * SCALE;
         const FRAME_W = 0.8 * SCALE;
         const frameY = stageHeight - DECK_THICKNESS - FRAME_H / 2;
 
-        // Two cross-members along length
         for (const offset of [0.25, 0.75]) {
           const barGeo = new THREE.BoxGeometry(deckL * 0.98, FRAME_H, FRAME_W);
           const barMesh = new THREE.Mesh(barGeo, deckFrameMat);
-          barMesh.position.set(
-            x + (deckL + GAP) / 2,
-            frameY,
-            z + (deckW + GAP) * offset
-          );
+          barMesh.position.set(cx, frameY, z + (deckW + GAP) * offset);
           barMesh.castShadow = true;
           scene.add(barMesh);
         }

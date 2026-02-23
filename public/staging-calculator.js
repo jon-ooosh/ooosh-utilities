@@ -1656,6 +1656,9 @@ function renderResults(result) {
     </div>
   </div>`;
 
+  // Accessories edge selector (after junction summary)
+  html += renderAccessoriesSection(result);
+
   // Warnings
   if (result.summary.warnings.length > 0) {
     html += `<div class="result-card warnings-card">
@@ -1663,6 +1666,9 @@ function renderResults(result) {
       <ul>${result.summary.warnings.map(w => `<li>${w}</li>`).join('')}</ul>
     </div>`;
   }
+
+  // Push to HireHop button (only if job number entered)
+  html += renderPushButton();
 
   resultsEl.innerHTML = html;
 }
@@ -1730,4 +1736,531 @@ function renderLayoutVisual(layout, totalLength, totalWidth, unit) {
     style="max-width:${svgWidth}px" xmlns="http://www.w3.org/2000/svg">
     ${svgContent}
   </svg>`;
+}
+
+
+// ============================================================================
+// ACCESSORIES — handrails and steps edge selection
+// ============================================================================
+
+/**
+ * Current accessory selections, keyed by edge name.
+ * Each edge can be: 'none', 'handrail', 'steps'
+ * 
+ * "Front" and "Back" run along the stage LENGTH.
+ * "Left" and "Right" run along the stage WIDTH.
+ */
+let accessorySelections = {
+  front: 'none',
+  back: 'none',
+  left: 'none',
+  right: 'none',
+};
+
+/**
+ * Calculate handrail sections needed to cover a given edge length.
+ * Uses greedy fill: largest available handrail first (8ft, 4ft, 2ft).
+ * 
+ * @param {number} edgeLengthIn - Edge length in inches
+ * @param {number} stepGapIn - Gap to leave for steps (0 if no steps on this edge)
+ * @returns {Array} Array of { handrail, qty } objects
+ */
+function calculateHandrailSections(edgeLengthIn, stepGapIn) {
+  if (!STOCK || !STOCK.handrails || STOCK.handrails.length === 0) return [];
+
+  const effectiveLength = edgeLengthIn - stepGapIn;
+  if (effectiveLength <= 0) return [];
+
+  // Sort handrails by length descending (largest first for greedy fill)
+  const sorted = [...STOCK.handrails]
+    .filter(h => h.lengthIn > 0)
+    .sort((a, b) => b.lengthIn - a.lengthIn);
+
+  if (sorted.length === 0) return [];
+
+  const result = [];
+  let remaining = effectiveLength;
+
+  for (const rail of sorted) {
+    if (remaining <= 0) break;
+    const qty = Math.floor(remaining / rail.lengthIn);
+    if (qty > 0) {
+      result.push({ handrail: rail, qty });
+      remaining -= qty * rail.lengthIn;
+    }
+  }
+
+  // If there's leftover (edge not perfectly divisible), add one more of smallest
+  if (remaining > 0 && sorted.length > 0) {
+    const smallest = sorted[sorted.length - 1];
+    const existing = result.find(r => r.handrail.name === smallest.name);
+    if (existing) {
+      existing.qty += 1;
+    } else {
+      result.push({ handrail: smallest, qty: 1 });
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Pick the best step size for the current stage height.
+ * Steps come in fixed heights (e.g. 1ft, 2ft).
+ * We pick the step whose height is closest to (but not exceeding) stage height.
+ * 
+ * @param {number} stageHeightIn - Stage height in inches
+ * @returns {Object|null} Best matching step from STOCK, or null
+ */
+function pickBestStep(stageHeightIn) {
+  if (!STOCK || !STOCK.steps || STOCK.steps.length === 0) return null;
+
+  // Filter steps that are <= stage height, sorted by height descending
+  const valid = STOCK.steps
+    .filter(s => s.heightIn > 0 && s.heightIn <= stageHeightIn)
+    .sort((a, b) => b.heightIn - a.heightIn);
+
+  return valid.length > 0 ? valid[0] : null;
+}
+
+/**
+ * Get the width of the step unit in inches (for handrail gap calculation).
+ * Steps are approximately 36" (~90cm) wide.
+ */
+function getStepWidthIn(step) {
+  return step && step.widthIn ? step.widthIn : 36;  // Default 36" if not specified
+}
+
+/**
+ * Calculate all accessory parts based on current edge selections.
+ * Returns an array of parts list entries (same format as compilePartsList).
+ * 
+ * @param {Object} result - The current calculation result
+ * @returns {Array} Accessory parts list entries
+ */
+function calculateAccessories(result) {
+  if (!result || !result.success) return [];
+  if (!STOCK || !STOCK.handrails || !STOCK.steps) return [];
+
+  const lengthIn = result.result.actualLength.inches;
+  const widthIn = result.result.actualWidth.inches;
+  const heightIn = result.result.actualHeight.inches;
+
+  const parts = [];
+  const handrailTotals = {};  // name → total qty needed
+
+  // Determine edge lengths
+  const edgeLengths = {
+    front: lengthIn,
+    back: lengthIn,
+    left: widthIn,
+    right: widthIn,
+  };
+
+  // Steps go on ENDS (left/right = width edges).
+  // If someone puts steps on front/back (length edges), we allow it but warn
+  // if the step width exceeds the edge (e.g. 36" step on a 24" wide edge).
+  const warnings = [];
+  let stepsEntry = null;
+  let stepEdge = null;
+
+  // First pass: find which edge has steps (if any)
+  for (const [edge, selection] of Object.entries(accessorySelections)) {
+    if (selection === 'steps') {
+      stepEdge = edge;
+      const step = pickBestStep(heightIn);
+      if (step) {
+        const stepWidth = getStepWidthIn(step);
+        const edgeLen = edgeLengths[edge];
+
+        // Check orientation constraint: steps should ideally go on an END
+        // (left/right edges = along the width dimension)
+        if ((edge === 'front' || edge === 'back') && edgeLen > widthIn) {
+          // Steps on a long edge — might work but check step width vs edge accessibility
+          // Not necessarily wrong, just note it
+        }
+
+        // Check if step width exceeds edge length
+        if (stepWidth > edgeLen) {
+          warnings.push(`⚠️ Steps (${inchesToFeetStr(stepWidth)} wide) exceed the ${edge} edge (${inchesToFeetStr(edgeLen)}). Consider placing steps on a longer edge.`);
+        }
+
+        stepsEntry = {
+          category: 'Accessories',
+          name: step.name,
+          qtyNeeded: 1,
+          qtyOwned: step.qty || 0,
+          shortfall: Math.max(0, 1 - (step.qty || 0)),
+          note: `${edge} edge`,
+          hirehopId: step.hirehopId || null,
+        };
+      } else {
+        warnings.push(`⚠️ No steps available for ${inchesToFeetStr(heightIn)} stage height.`);
+      }
+    }
+  }
+
+  // Second pass: calculate handrails
+  for (const [edge, selection] of Object.entries(accessorySelections)) {
+    if (selection === 'handrail') {
+      const edgeLen = edgeLengths[edge];
+
+      // If steps are on this same edge, leave a gap for the step width
+      const stepGap = (stepEdge === edge && stepsEntry) ? getStepWidthIn(pickBestStep(heightIn)) : 0;
+
+      const sections = calculateHandrailSections(edgeLen, stepGap);
+
+      for (const { handrail, qty } of sections) {
+        handrailTotals[handrail.name] = (handrailTotals[handrail.name] || 0) + qty;
+      }
+    }
+  }
+
+  // Convert handrail totals to parts list entries
+  for (const rail of STOCK.handrails) {
+    const needed = handrailTotals[rail.name] || 0;
+    if (needed > 0) {
+      parts.push({
+        category: 'Accessories',
+        name: rail.name,
+        qtyNeeded: needed,
+        qtyOwned: rail.qty || 0,
+        shortfall: Math.max(0, needed - (rail.qty || 0)),
+        note: '',
+        hirehopId: rail.hirehopId || null,
+      });
+    }
+  }
+
+  // Add steps entry
+  if (stepsEntry) {
+    parts.push(stepsEntry);
+  }
+
+  // Store warnings for display
+  parts._accessoryWarnings = warnings;
+
+  return parts;
+}
+
+
+/**
+ * Render the accessories edge selector UI.
+ * Shows after the main parts list, with dropdowns for each edge.
+ */
+function renderAccessoriesSection(result) {
+  if (!result || !result.success) return '';
+  if (!STOCK || !STOCK.handrails || !STOCK.steps) return '';
+
+  const unit = result.input.unit;
+  const lengthIn = result.result.actualLength.inches;
+  const widthIn = result.result.actualWidth.inches;
+  const heightIn = result.result.actualHeight.inches;
+
+  const lengthLabel = formatDimensionForUnit(lengthIn, unit);
+  const widthLabel = formatDimensionForUnit(widthIn, unit);
+  const heightLabel = formatDimensionForUnit(heightIn, unit);
+
+  // Auto-suggestions
+  const suggestions = [];
+  if (heightIn >= 24) {  // 2ft+
+    suggestions.push('🪜 Stage is ' + heightLabel + ' high — steps recommended for safe access.');
+  }
+  // Check for open edges (any edge without handrail/steps)
+  const openEdges = Object.entries(accessorySelections)
+    .filter(([_, sel]) => sel === 'none')
+    .map(([edge]) => edge);
+  if (heightIn >= 24 && openEdges.length > 0) {
+    suggestions.push('🛡️ Open edges detected — consider handrails for safety.');
+  }
+
+  // Edge definitions for the visual selector
+  const edges = [
+    { key: 'back',  label: 'Back',  length: lengthIn, lengthLabel: lengthLabel, cssClass: 'edge-back' },
+    { key: 'left',  label: 'Left',  length: widthIn,  lengthLabel: widthLabel,  cssClass: 'edge-left' },
+    { key: 'right', label: 'Right', length: widthIn,  lengthLabel: widthLabel,  cssClass: 'edge-right' },
+    { key: 'front', label: 'Front', length: lengthIn, lengthLabel: lengthLabel, cssClass: 'edge-front' },
+  ];
+
+  let html = `<div class="result-card accessories-card">
+    <h2>🔧 Accessories</h2>`;
+
+  // Suggestions
+  if (suggestions.length > 0) {
+    html += `<div class="info-banner" style="margin-bottom:16px">
+      ${suggestions.join('<br>')}
+    </div>`;
+  }
+
+  // Edge selector grid — simple visual layout
+  html += `<div class="edge-selector">
+    <p class="edge-selector-label">Select accessories for each edge:</p>
+    <div class="edge-grid">`;
+
+  // Visual stage representation with edge selectors
+  html += `<div class="stage-edge-visual">
+      <div class="edge-visual-top">
+        <span class="edge-dim">${lengthLabel}</span>
+      </div>`;
+
+  // Back edge (top)
+  html += renderEdgeRow('back', 'Back', lengthLabel);
+
+  // Middle row with left, stage body, right
+  html += `<div class="edge-visual-middle">`;
+  html += renderEdgeSide('left', 'Left', widthLabel);
+  html += `<div class="stage-body">
+        <span class="stage-body-label">STAGE</span>
+        <span class="stage-body-dim">${lengthLabel} × ${widthLabel}</span>
+        <span class="stage-body-dim">Height: ${heightLabel}</span>
+      </div>`;
+  html += renderEdgeSide('right', 'Right', widthLabel);
+  html += `</div>`;
+
+  // Front edge (bottom)
+  html += renderEdgeRow('front', 'Front (audience)', lengthLabel);
+
+  html += `</div></div>`;
+
+  // Accessory parts breakdown
+  const accessoryParts = calculateAccessories(result);
+  if (accessoryParts.length > 0) {
+    const hasAvailability = AVAILABILITY !== null;
+
+    html += `<div class="accessory-parts" style="margin-top:20px">
+      <h3>Accessory Parts Needed</h3>
+      <table class="parts-table">
+        <thead>
+          <tr>
+            <th>Item</th>
+            <th>Needed</th>
+            <th>${hasAvailability ? 'Owned' : 'In Stock'}</th>
+            ${hasAvailability ? '<th>Available</th>' : ''}
+            <th>Status</th>
+            <th>Notes</th>
+          </tr>
+        </thead>
+        <tbody>`;
+
+    for (const part of accessoryParts) {
+      const availQty = getAvailableQtyForPart(part);
+      const effectiveQty = availQty !== null ? availQty : part.qtyOwned;
+      const effectiveShortfall = Math.max(0, part.qtyNeeded - effectiveQty);
+
+      const statusClass = effectiveShortfall > 0 ? 'status-short' :
+        part.qtyNeeded <= effectiveQty * 0.8 ? 'status-ok' : 'status-tight';
+      const statusText = effectiveShortfall > 0 ? `Short ${effectiveShortfall}` :
+        part.qtyNeeded === effectiveQty ? 'Exact' : 'OK';
+      const statusIcon = effectiveShortfall > 0 ? '🔴' : part.qtyNeeded >= effectiveQty ? '🟡' : '🟢';
+
+      let availCell = '';
+      if (hasAvailability) {
+        if (availQty !== null) {
+          const availClass = availQty >= part.qtyNeeded ? 'ok' :
+            availQty > 0 ? 'tight' : 'short';
+          availCell = `<td class="num"><span class="avail-badge ${availClass}">${availQty}</span></td>`;
+        } else {
+          availCell = `<td class="num" style="color:#94a3b8">—</td>`;
+        }
+      }
+
+      html += `<tr>
+        <td>${part.name}</td>
+        <td class="num">${part.qtyNeeded}</td>
+        <td class="num">${part.qtyOwned}</td>
+        ${availCell}
+        <td class="${statusClass}">${statusIcon} ${statusText}</td>
+        <td class="note">${part.note}</td>
+      </tr>`;
+    }
+
+    html += `</tbody></table>`;
+
+    // Show accessory warnings
+    if (accessoryParts._accessoryWarnings && accessoryParts._accessoryWarnings.length > 0) {
+      html += `<div class="info-banner" style="margin-top:12px; background:#fef3c7; border-left-color:#f59e0b">
+        ${accessoryParts._accessoryWarnings.join('<br>')}
+      </div>`;
+    }
+
+    html += `</div>`;
+  } else if (Object.values(accessorySelections).some(s => s !== 'none')) {
+    html += `<p style="color:#6b7280; margin-top:12px">No matching accessories found in stock.</p>`;
+  }
+
+  html += `</div>`;
+  return html;
+}
+
+/**
+ * Render a horizontal edge selector row (for front/back edges).
+ */
+function renderEdgeRow(key, label, lengthLabel) {
+  const sel = accessorySelections[key];
+  return `<div class="edge-row">
+    <span class="edge-label">${label} <span class="edge-length">(${lengthLabel})</span></span>
+    <div class="edge-options">
+      <button class="edge-btn ${sel === 'none' ? 'active' : ''}" onclick="setEdge('${key}','none')">None</button>
+      <button class="edge-btn ${sel === 'handrail' ? 'active' : ''}" onclick="setEdge('${key}','handrail')">🛡️ Handrail</button>
+      <button class="edge-btn ${sel === 'steps' ? 'active' : ''}" onclick="setEdge('${key}','steps')">🪜 Steps</button>
+    </div>
+  </div>`;
+}
+
+/**
+ * Render a vertical edge selector (for left/right edges).
+ */
+function renderEdgeSide(key, label, lengthLabel) {
+  const sel = accessorySelections[key];
+  return `<div class="edge-side">
+    <span class="edge-label">${label} <span class="edge-length">(${lengthLabel})</span></span>
+    <div class="edge-options edge-options-vertical">
+      <button class="edge-btn edge-btn-sm ${sel === 'none' ? 'active' : ''}" onclick="setEdge('${key}','none')">None</button>
+      <button class="edge-btn edge-btn-sm ${sel === 'handrail' ? 'active' : ''}" onclick="setEdge('${key}','handrail')">🛡️</button>
+      <button class="edge-btn edge-btn-sm ${sel === 'steps' ? 'active' : ''}" onclick="setEdge('${key}','steps')">🪜</button>
+    </div>
+  </div>`;
+}
+
+/**
+ * Handle edge selection change — update state and re-render accessories section.
+ */
+function setEdge(edge, value) {
+  // Only one edge can have steps at a time
+  if (value === 'steps') {
+    for (const key of Object.keys(accessorySelections)) {
+      if (key !== edge && accessorySelections[key] === 'steps') {
+        accessorySelections[key] = 'none';
+      }
+    }
+  }
+
+  accessorySelections[edge] = value;
+
+  // Re-render just the accessories card
+  if (currentResult && currentResult.success) {
+    const container = document.querySelector('.accessories-card');
+    if (container) {
+      // Replace the entire accessories card
+      const temp = document.createElement('div');
+      temp.innerHTML = renderAccessoriesSection(currentResult);
+      container.replaceWith(temp.firstElementChild);
+    }
+  }
+}
+
+
+// ============================================================================
+// PUSH TO HIREHOP — add parts to a HireHop job
+// ============================================================================
+
+/**
+ * Collect all items (main parts + accessories) and push to HireHop job.
+ * Shows a confirmation dialog first.
+ */
+async function pushToJob() {
+  if (!currentResult || !currentResult.success) return;
+
+  const jobId = document.getElementById('job-number').value.trim();
+  if (!jobId || !/^\d+$/.test(jobId)) {
+    alert('Please enter a valid job number first.');
+    return;
+  }
+
+  // Collect all items with HireHop IDs
+  const items = [];
+
+  // Main parts list
+  for (const part of currentResult.partsList) {
+    if (part.hirehopId && part.qtyNeeded > 0) {
+      items.push({ hirehopId: part.hirehopId, qty: part.qtyNeeded, name: part.name });
+    }
+  }
+
+  // Accessory parts
+  const accessoryParts = calculateAccessories(currentResult);
+  for (const part of accessoryParts) {
+    if (part.hirehopId && part.qtyNeeded > 0) {
+      items.push({ hirehopId: part.hirehopId, qty: part.qtyNeeded, name: part.name });
+    }
+  }
+
+  if (items.length === 0) {
+    alert('No items with HireHop IDs to push.');
+    return;
+  }
+
+  // Build confirmation message
+  const totalQty = items.reduce((sum, i) => sum + i.qty, 0);
+  const itemList = items.map(i => `  ${i.qty}× ${i.name}`).join('\n');
+  const confirmed = confirm(
+    `Push ${items.length} item types (${totalQty} total) to Job ${jobId}?\n\n${itemList}\n\nThis will ADD items to the job (won't replace existing items).`
+  );
+
+  if (!confirmed) return;
+
+  // Update button state
+  const btn = document.getElementById('push-to-job-btn');
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = '⏳ Pushing…';
+  }
+
+  try {
+    const response = await fetch('/.netlify/functions/staging-push', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        jobId: jobId,
+        items: items.map(i => ({ hirehopId: i.hirehopId, qty: i.qty })),
+      }),
+    });
+
+    const data = await response.json();
+
+    if (data.success) {
+      if (btn) {
+        btn.textContent = '✅ Pushed!';
+        btn.classList.add('btn-success');
+        setTimeout(() => {
+          btn.textContent = '📤 Push to Job';
+          btn.classList.remove('btn-success');
+          btn.disabled = false;
+        }, 3000);
+      }
+    } else {
+      throw new Error(data.error || 'Unknown error');
+    }
+
+  } catch (err) {
+    console.error('Push to job failed:', err);
+    if (btn) {
+      btn.textContent = '❌ Failed';
+      btn.disabled = false;
+      setTimeout(() => {
+        btn.textContent = '📤 Push to Job';
+      }, 3000);
+    }
+    alert(`Failed to push to job: ${err.message}`);
+  }
+}
+
+/**
+ * Render the "Push to Job" button.
+ * Only shows when a job number is entered.
+ */
+function renderPushButton() {
+  const jobId = document.getElementById('job-number')?.value?.trim();
+  if (!jobId || !currentResult || !currentResult.success) return '';
+
+  return `<div class="result-card push-card" style="text-align:center">
+    <button id="push-to-job-btn" class="btn btn-calculate" 
+      style="padding:12px 32px; font-size:15px; background:linear-gradient(135deg, #059669 0%, #10b981 100%)"
+      onclick="pushToJob()">
+      📤 Push to Job ${jobId}
+    </button>
+    <p style="font-size:12px; color:#6b7280; margin-top:8px">
+      Adds all items (including accessories) to HireHop job. Won't replace existing items.
+    </p>
+  </div>`;
 }
