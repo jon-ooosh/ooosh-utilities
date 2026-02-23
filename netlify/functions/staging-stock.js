@@ -7,7 +7,7 @@
  * STOCK object matching the staging calculator's format.
  * 
  * Env vars required:
- *   HIREHOP_EXPORT_ID  - HireHop company export ID (e.g. 2346)
+ *   HIREHOP_EXPORT_ID  - HireHop company export ID 
  *   HIREHOP_EXPORT_KEY - HireHop export key (secret)
  * 
  * Returns: { success, stock, raw, timestamp }

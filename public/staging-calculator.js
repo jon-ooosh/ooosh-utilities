@@ -1301,4 +1301,4 @@ function renderLayoutVisual(layout, totalLength, totalWidth, unit) {
     style="max-width:${svgWidth}px" xmlns="http://www.w3.org/2000/svg">
     ${svgContent}
   </svg>`;
-}
+} 
