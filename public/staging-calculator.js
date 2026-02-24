@@ -1675,8 +1675,8 @@ function renderResults(result) {
     </div>
   </div>`;
 
-  // Accessories edge selector (after junction summary)
-  html += renderAccessoriesSection(result);
+  // Accessories edge selector — persistent container (innerHTML swapped on toggle)
+  html += `<div id="accessories-container">${renderAccessoriesSection(result)}</div>`;
 
   // Warnings
   if (result.summary.warnings.length > 0) {
@@ -2259,18 +2259,11 @@ function clearEdge(edge) {
 function refreshAccessoriesAndPush() {
   if (!currentResult || !currentResult.success) return;
 
-  // Re-render accessories card (isolated — errors won't block push button)
+  // Re-render accessories card (uses persistent container — safe innerHTML swap)
   try {
-    const container = document.querySelector('.accessories-card');
-    if (container) {
-      const newHtml = renderAccessoriesSection(currentResult);
-      if (newHtml) {
-        const temp = document.createElement('div');
-        temp.innerHTML = newHtml;
-        if (temp.firstElementChild) {
-          container.replaceWith(temp.firstElementChild);
-        }
-      }
+    const accContainer = document.getElementById('accessories-container');
+    if (accContainer) {
+      accContainer.innerHTML = renderAccessoriesSection(currentResult);
     }
   } catch (accErr) {
     console.warn('Accessories re-render failed (non-fatal):', accErr);
