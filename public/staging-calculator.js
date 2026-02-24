@@ -20,6 +20,7 @@
 let STOCK = null;          // Set by fetchStock()
 let LEG_HEIGHTS = [];      // Rebuilt after stock loads
 let AVAILABILITY = null;   // Set by fetchAvailability() — date-specific availability data
+let stageRotated = false;  // Whether the 2D/3D layout is shown rotated 90° (swaps length and width axes)
 
 // ── Availability caching ──
 // Tracks the last date range we fetched availability for.
@@ -367,27 +368,97 @@ function assignHardware(junctions, finishedHeightIn, combinerMode) {
 /**
  * Match required leg heights to available stock.
  */
+/**
+ * Get the physical height of a screwjack in inches.
+ * The netlify function should provide heightIn directly, but we also parse from the name
+ * as a fallback (e.g. 'Screwjack - 19.5" / 50cm (48mm)').
+ */
+function getScrewjackHeightIn(sj) {
+  if (sj.heightIn) return sj.heightIn;
+  const match = (sj.name || '').match(/(\d+(?:\.\d+)?)"/);
+  return match ? parseFloat(match[1]) : null;
+}
+
+/**
+ * Pick the smallest screwjack whose useable range covers the required extension.
+ * Useable maximum = 70% of physical height.
+ * Returns the screwjack object from STOCK, or null if none are big enough.
+ */
+function selectScrewjack(extensionNeededIn) {
+  if (!STOCK.screwjacks || STOCK.screwjacks.length === 0) return null;
+
+  // Sort smallest first so we use the minimum size that works
+  const sorted = [...STOCK.screwjacks].sort((a, b) => {
+    return (getScrewjackHeightIn(a) || 0) - (getScrewjackHeightIn(b) || 0);
+  });
+
+  for (const sj of sorted) {
+    const physicalHeight = getScrewjackHeightIn(sj);
+    if (!physicalHeight) continue;
+    const maxExtension = physicalHeight * 0.70;
+    if (extensionNeededIn <= maxExtension) return sj;
+  }
+
+  return null; // No screwjack is tall enough
+}
+
+/**
+ * Match required leg heights against available stock.
+ * 
+ * For exact matches, uses a standard leg directly.
+ * For non-standard heights, attempts a screwjack combo:
+ *   - Find the tallest standard leg where target > leg.heightIn + 2"
+ *     (the 2" is the minimum body height: leg sits 2" off the ground on the screwjack)
+ *   - extension_needed = target_finished_height - leg.heightIn - 2"
+ *   - Pick the smallest screwjack whose 70% useable range covers that extension
+ * If no combo works, flags as unavailable/impossible.
+ */
 function matchLegs(legNeeds) {
-  const matched = [];
-  const screwjackNeeded = [];
-  const unavailable = [];
+  const SJ_BODY_HEIGHT = 2; // inches — leg sits this far above ground on the screwjack body
+
+  const matched = [];           // Standard legs (exact match)
+  const screwjackCombos = [];   // { leg, jack, qtyNeeded, extensionIn } — leg + screwjack pairs
+  const unavailable = [];       // Heights that cannot be achieved at all
 
   for (const [heightStr, qty] of Object.entries(legNeeds)) {
-    const heightIn = parseFloat(heightStr);
-    const exactLeg = STOCK.legs.find(l => l.heightIn === heightIn);
+    const targetHeightIn = parseFloat(heightStr);
+    const exactLeg = STOCK.legs.find(l => l.heightIn === targetHeightIn);
 
     if (exactLeg) {
+      // Perfect match — standard leg, no screwjack needed
       matched.push({
         leg: exactLeg,
         qtyNeeded: qty,
         shortfall: Math.max(0, qty - exactLeg.qty),
       });
     } else {
-      screwjackNeeded.push({ heightIn, qty });
+      // No exact leg — try to build height with leg + screwjack
+      // We need: leg.heightIn + 2 (body) + extension = target
+      // So extension = target - leg.heightIn - 2
+      // The leg must be short enough that extension >= 0
+      const candidateLegs = STOCK.legs
+        .filter(l => l.heightIn <= targetHeightIn - SJ_BODY_HEIGHT)
+        .sort((a, b) => b.heightIn - a.heightIn); // tallest first
+
+      let comboFound = false;
+      for (const leg of candidateLegs) {
+        const extensionIn = targetHeightIn - leg.heightIn - SJ_BODY_HEIGHT;
+        const jack = selectScrewjack(extensionIn);
+        if (jack) {
+          screwjackCombos.push({ leg, jack, qtyNeeded: qty, extensionIn });
+          comboFound = true;
+          break;
+        }
+      }
+
+      if (!comboFound) {
+        // No combination of standard leg + available screwjack can reach this height
+        unavailable.push({ heightIn: targetHeightIn, qty });
+      }
     }
   }
 
-  return { matched, screwjackNeeded, unavailable };
+  return { matched, screwjackCombos, unavailable };
 }
 
 
@@ -510,18 +581,46 @@ function compilePartsList(layout, hardware, legMatch) {
     });
   }
 
-  // Screwjack flags
-  for (const sj of legMatch.screwjackNeeded) {
+  // Screwjack combo legs — each combo is a paired standard leg + screwjack
+  for (const combo of legMatch.screwjackCombos) {
+    // The standard leg used as the base
     parts.push({
-      category: 'Legs', name: `${sj.heightIn}" leg (non-standard)`,
-      qtyNeeded: sj.qty, qtyOwned: 0, shortfall: sj.qty,
-      note: '⚠️ No standard leg — screwjack or sub-hire needed',
+      category: 'Legs',
+      name: combo.leg.name,
+      qtyNeeded: combo.qtyNeeded,
+      qtyOwned: combo.leg.qty,
+      shortfall: Math.max(0, combo.qtyNeeded - combo.leg.qty),
+      note: `${combo.leg.colour || ''}${combo.leg.colour ? ' · ' : ''}with screwjack (${combo.extensionIn.toFixed(1)}" extension)`,
+      hirehopId: combo.leg.hirehopId || null,
+    });
+    // The screwjack itself
+    const jackQtyOwned = combo.jack.qty || 0;
+    parts.push({
+      category: 'Legs',
+      name: combo.jack.name,
+      qtyNeeded: combo.qtyNeeded,
+      qtyOwned: jackQtyOwned,
+      shortfall: Math.max(0, combo.qtyNeeded - jackQtyOwned),
+      note: `paired with ${combo.leg.name}`,
+      hirehopId: combo.jack.hirehopId || null,
+    });
+  }
+
+  // Impossible heights — flag clearly, nothing to push to HireHop
+  for (const u of legMatch.unavailable) {
+    parts.push({
+      category: 'Legs',
+      name: `${u.heightIn}" stage height — NOT ACHIEVABLE`,
+      qtyNeeded: u.qty,
+      qtyOwned: 0,
+      shortfall: u.qty,
+      note: '⚠️ Exceeds all screwjack ranges — sub-hire or custom solution needed',
+      hirehopId: null,
     });
   }
 
   return parts;
 }
-
 
 // ============================================================================
 // MAIN CALCULATION ENTRY POINT
@@ -578,7 +677,7 @@ function calculate(params) {
   const dimensionMatch = (bestLength === targetLengthIn && bestWidth === targetWidthIn);
 
   // Height alternatives
-  const hasNonStandardLegs = legMatch.screwjackNeeded.length > 0;
+  const hasNonStandardLegs = (legMatch.screwjackCombos.length > 0 || legMatch.unavailable.length > 0);
   const heightWasSnapped = !standardHeightMatch;
   let heightAlternatives = [];
   if (hasNonStandardLegs || heightWasSnapped) {
@@ -1253,6 +1352,7 @@ async function handleCalculate(e) {
   };
 
   // Use orientation-optimised calculation
+  stageRotated = false;  // Reset rotation on each new calculation
   currentResult = calculateBestOrientation({ length, width, height, unit, combinerMode });
 
   if (currentResult.success) {
@@ -1444,6 +1544,8 @@ function build3DViewUrl() {
     u: unit,
     // Accessories: which edges have handrails/steps
     acc: accessorySelections,
+    // Whether the stage view is rotated 90° (swaps length/width axes in 3D scene)
+    rot: stageRotated,
   };
 
   // Compress config using pako deflate + base64url encoding for shorter URLs
@@ -1467,6 +1569,59 @@ function build3DViewUrl() {
   // Fallback: legacy uncompressed format
   const encoded = encodeURIComponent(JSON.stringify(config));
   return `${window.location.origin}/stage-view.html?config=${encoded}`;
+}
+
+/**
+ * Toggle the stage layout rotation 90°.
+ * Swaps the SVG axes (length↔width) and remaps accessory edge selections
+ * so that handrail/step assignments follow the visual rotation.
+ *
+ * Rotation is 90° clockwise — the right edge becomes the new audience-facing front.
+ * Rotating again reverses (CCW) back to normal.
+ * The actual parts calculation is completely unchanged.
+ */
+function rotateStageLayout() {
+  stageRotated = !stageRotated;
+
+  // Remap accessory selections to follow the rotation.
+  // 90° CW: old_right → new_front, old_front → new_left, old_left → new_back, old_back → new_right
+  // 90° CCW (toggle back): old_left → new_front, old_back → new_left, old_right → new_back, old_front → new_right
+  const old = {
+    front: { ...accessorySelections.front },
+    back:  { ...accessorySelections.back },
+    left:  { ...accessorySelections.left },
+    right: { ...accessorySelections.right },
+  };
+
+  if (stageRotated) {
+    // Going to rotated state (CW): right side becomes new audience front
+    accessorySelections.front = old.right;
+    accessorySelections.left  = old.front;
+    accessorySelections.back  = old.left;
+    accessorySelections.right = old.back;
+  } else {
+    // Going back to normal state (CCW): invert the CW remap
+    accessorySelections.front = old.left;
+    accessorySelections.back  = old.right;
+    accessorySelections.left  = old.back;
+    accessorySelections.right = old.front;
+  }
+
+  // Update the deck layout SVG in-place (no need to re-run calculation)
+  const layoutContainer = document.querySelector('.layout-visual-container');
+  if (layoutContainer && currentResult && currentResult.success) {
+    const r = currentResult.result;
+    layoutContainer.innerHTML = renderLayoutVisual(
+      currentResult.layout,
+      r.actualLength.inches,
+      r.actualWidth.inches,
+      currentResult.input.unit,
+      stageRotated
+    );
+  }
+
+  // Re-render accessories and push button to reflect new edge labels/dimensions
+  refreshAccessoriesAndPush();
 }
 
 /**
@@ -1557,9 +1712,14 @@ function renderResults(result) {
 
   // Deck layout visual
   html += `<div class="result-card">
-    <h2>Deck Layout <span class="badge">${result.summary.totalDecks} decks</span></h2>
+    <h2>Deck Layout <span class="badge">${result.summary.totalDecks} decks</span>
+      <button onclick="rotateStageLayout()" title="Rotate stage view 90°" 
+        style="margin-left:10px; padding:4px 10px; font-size:13px; font-weight:500; 
+               background:#f1f5f9; border:1px solid #cbd5e1; border-radius:6px; 
+               cursor:pointer; color:#475569; vertical-align:middle;">⟳ Rotate</button>
+    </h2>
     <div class="layout-visual-container">
-      ${renderLayoutVisual(result.layout, result.result.actualLength.inches, result.result.actualWidth.inches, unit)}
+      ${renderLayoutVisual(result.layout, result.result.actualLength.inches, result.result.actualWidth.inches, unit, stageRotated)}
     </div>`;
 
   // Stock-only mode banner OR stock-constrained alternative (both live inside the Deck Layout card)
@@ -1681,7 +1841,7 @@ function renderResults(result) {
     html += `<div class="alt-section">
       <h3>📏 Nearest standard heights from stock</h3>
       <p style="font-size:13px; color:#6b7280; margin-bottom:10px">
-        ${result.legMatch.screwjackNeeded.length > 0
+        ${(result.legMatch.screwjackCombos?.length > 0 || result.legMatch.unavailable?.length > 0)
           ? 'The required leg height isn\'t standard. Here are the closest achievable stage heights using legs you own:'
           : 'Your requested height was adjusted to the nearest standard leg. Other standard heights available:'}
       </p>
@@ -1752,17 +1912,27 @@ function renderResults(result) {
 // 2D LAYOUT VISUAL (SVG) — unit-aware labels
 // ============================================================================
 
-function renderLayoutVisual(layout, totalLength, totalWidth, unit) {
+/**
+ * Render the 2D deck layout as an SVG.
+ * When rotated=true, the stage axes are swapped (length↔width) so the user
+ * can view the stage with the wider/narrower dimension facing the audience.
+ * The underlying calculation is unchanged — this is purely visual.
+ */
+function renderLayoutVisual(layout, totalLength, totalWidth, unit, rotated) {
+  // When rotated, swap which axis is horizontal vs vertical in the SVG
+  const svgTotalX = rotated ? totalWidth : totalLength;
+  const svgTotalY = rotated ? totalLength : totalWidth;
+
   const maxViewWidth = 600;
   const maxViewHeight = 300;
   const padding = 30;
 
-  const scaleX = (maxViewWidth - padding * 2) / totalLength;
-  const scaleY = (maxViewHeight - padding * 2) / totalWidth;
+  const scaleX = (maxViewWidth - padding * 2) / svgTotalX;
+  const scaleY = (maxViewHeight - padding * 2) / svgTotalY;
   const scale = Math.min(scaleX, scaleY);
 
-  const svgWidth = totalLength * scale + padding * 2;
-  const svgHeight = totalWidth * scale + padding * 2;
+  const svgWidth = svgTotalX * scale + padding * 2;
+  const svgHeight = svgTotalY * scale + padding * 2;
 
   const deckColours = {
     96: { fill: '#dbeafe', stroke: '#3b82f6' },
@@ -1774,10 +1944,16 @@ function renderLayoutVisual(layout, totalLength, totalWidth, unit) {
   let svgContent = '';
 
   for (const placed of layout) {
-    const x = placed.x * scale + padding;
-    const y = placed.y * scale + padding;
-    const w = placed.orientedLength * scale;
-    const h = placed.orientedWidth * scale;
+    // When rotated, swap the x/y coordinates and length/width of each deck
+    const px = rotated ? placed.y : placed.x;
+    const py = rotated ? placed.x : placed.y;
+    const pw = rotated ? placed.orientedWidth : placed.orientedLength;
+    const ph = rotated ? placed.orientedLength : placed.orientedWidth;
+
+    const x = px * scale + padding;
+    const y = py * scale + padding;
+    const w = pw * scale;
+    const h = ph * scale;
     const colour = deckColours[placed.deck.lengthIn] || { fill: '#f3f4f6', stroke: '#6b7280' };
 
     svgContent += `<rect x="${x}" y="${y}" width="${w}" height="${h}" 
@@ -1794,17 +1970,19 @@ function renderLayoutVisual(layout, totalLength, totalWidth, unit) {
     }
   }
 
-  const totalLengthLabel = formatDimensionForUnit(totalLength, unit);
-  const totalWidthLabel = formatDimensionForUnit(totalWidth, unit);
+  // Horizontal label (top) — always shows the dimension that runs left-right in the view
+  const hLabel = formatDimensionForUnit(svgTotalX, unit);
+  // Vertical label (left side) — the dimension that runs top-bottom
+  const vLabel = formatDimensionForUnit(svgTotalY, unit);
 
   svgContent += `<text x="${svgWidth / 2}" y="${padding - 10}" 
     text-anchor="middle" font-size="13" fill="#374151" font-weight="600"
-    font-family="Inter, sans-serif">← ${totalLengthLabel} →</text>`;
+    font-family="Inter, sans-serif">← ${hLabel} →</text>`;
 
   svgContent += `<text x="${padding - 10}" y="${svgHeight / 2}" 
     text-anchor="middle" font-size="13" fill="#374151" font-weight="600"
     font-family="Inter, sans-serif"
-    transform="rotate(-90, ${padding - 10}, ${svgHeight / 2})">← ${totalWidthLabel} →</text>`;
+    transform="rotate(-90, ${padding - 10}, ${svgHeight / 2})">← ${vLabel} →</text>`;
 
   // "Audience" label at the bottom — the front/audience edge is always at the bottom of the layout
   svgContent += `<text x="${svgWidth / 2}" y="${svgHeight - 2}"
@@ -1964,11 +2142,17 @@ function calculateAccessories(result) {
   const parts = [];
   const handrailTotals = {};  // name → total qty needed
 
-  // Determine edge lengths
-  const edgeLengths = {
+  // Determine edge lengths — when the view is rotated, the front/back edges run along the
+  // *width* dimension (they were left/right before rotation), and vice versa.
+  const edgeLengths = stageRotated ? {
+    front: widthIn,
+    back:  widthIn,
+    left:  lengthIn,
+    right: lengthIn,
+  } : {
     front: lengthIn,
-    back: lengthIn,
-    left: widthIn,
+    back:  lengthIn,
+    left:  widthIn,
     right: widthIn,
   };
 
@@ -2074,9 +2258,18 @@ function renderAccessoriesSection(result) {
   const widthIn = result.result.actualWidth.inches;
   const heightIn = result.result.actualHeight.inches;
 
-  const lengthLabel = formatDimensionForUnit(lengthIn, unit);
-  const widthLabel = formatDimensionForUnit(widthIn, unit);
+  // When the layout is rotated, the front/back edges run along the width dimension
+  // (and left/right run along the length dimension), so swap the display labels.
+  const frontEdgeLengthIn = stageRotated ? widthIn : lengthIn;
+  const sideEdgeLengthIn  = stageRotated ? lengthIn : widthIn;
+
+  const frontEdgeLabel = formatDimensionForUnit(frontEdgeLengthIn, unit);
+  const sideEdgeLabel  = formatDimensionForUnit(sideEdgeLengthIn, unit);
   const heightLabel = formatDimensionForUnit(heightIn, unit);
+
+  // Stage body dimensions for display — show the view-oriented dims (h × d)
+  const stageBodyHoriz = formatDimensionForUnit(frontEdgeLengthIn, unit);  // left-right in current view
+  const stageBodyVert  = formatDimensionForUnit(sideEdgeLengthIn, unit);   // top-bottom in current view
 
   // Auto-suggestions
   const suggestions = [];
@@ -2110,25 +2303,25 @@ function renderAccessoriesSection(result) {
   // Visual stage representation with edge selectors
   html += `<div class="stage-edge-visual">
       <div class="edge-visual-top">
-        <span class="edge-dim">${lengthLabel}</span>
+        <span class="edge-dim">${frontEdgeLabel}</span>
       </div>`;
 
   // Back edge (top)
-  html += renderEdgeRow('back', 'Back', lengthLabel);
+  html += renderEdgeRow('back', 'Back', frontEdgeLabel);
 
   // Middle row with left, stage body, right
   html += `<div class="edge-visual-middle">`;
-  html += renderEdgeSide('left', 'Left', widthLabel);
+  html += renderEdgeSide('left', 'Left', sideEdgeLabel);
   html += `<div class="stage-body">
         <span class="stage-body-label">STAGE</span>
-        <span class="stage-body-dim">${lengthLabel} × ${widthLabel}</span>
+        <span class="stage-body-dim">${stageBodyHoriz} × ${stageBodyVert}</span>
         <span class="stage-body-dim">Height: ${heightLabel}</span>
       </div>`;
-  html += renderEdgeSide('right', 'Right', widthLabel);
+  html += renderEdgeSide('right', 'Right', sideEdgeLabel);
   html += `</div>`;
 
   // Front edge (bottom)
-  html += renderEdgeRow('front', 'Front (audience)', lengthLabel);
+  html += renderEdgeRow('front', 'Front (audience)', frontEdgeLabel);
 
   // Close stage-edge-visual, edge-grid, and edge-selector
   html += `</div></div></div>`;

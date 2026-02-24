@@ -340,6 +340,25 @@
     function buildScene(cfg) {
       const canvas = document.getElementById('stage-canvas');
 
+      // ── Apply rotation if requested ──
+      // When cfg.rot=true, the stage length and width axes are swapped to match
+      // the rotated 2D layout. We transpose deck coords and swap dimensions.
+      if (cfg.rot) {
+        [cfg.l, cfg.w] = [cfg.w, cfg.l];
+        cfg.d = cfg.d.map(([x, y, dl, dw]) => [y, x, dw, dl]);
+        cfg.j = cfg.j.map(([x, y, t]) => [y, x, t]);
+        // Remap accessory edge selections to match the same CW rotation applied in the 2D view
+        if (cfg.acc) {
+          const old = { ...cfg.acc };
+          cfg.acc = {
+            front: old.right || { handrail: false, steps: false },
+            left:  old.front || { handrail: false, steps: false },
+            back:  old.left  || { handrail: false, steps: false },
+            right: old.back  || { handrail: false, steps: false },
+          };
+        }
+      }
+
       // ── Renderer ──
       const renderer = new THREE.WebGLRenderer({
         canvas,
@@ -825,6 +844,39 @@
           }
         }
       }
+
+      // ── Audience label — flat canvas-texture plane on the ground at the front edge ──
+      // "Front" is at z = stageWidth. We paint a "▼ AUDIENCE" text onto a canvas,
+      // turn it into a Three.js texture, and lay it flat on the ground just outside the stage.
+      (function addAudienceLabel() {
+        const labelCanvas = document.createElement('canvas');
+        labelCanvas.width = 512;
+        labelCanvas.height = 96;
+        const ctx = labelCanvas.getContext('2d');
+        ctx.clearRect(0, 0, 512, 96);
+        ctx.font = 'bold 36px Arial, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = '#64748b';
+        ctx.fillText('▼  AUDIENCE', 256, 48);
+
+        const texture = new THREE.CanvasTexture(labelCanvas);
+        // Size the plane relative to the stage's front edge width
+        const labelW = stageLength * 0.65;
+        const labelH = labelW * (96 / 512); // maintain aspect ratio
+        const geo = new THREE.PlaneGeometry(labelW, labelH);
+        const mat = new THREE.MeshBasicMaterial({
+          map: texture,
+          transparent: true,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+        });
+        const mesh = new THREE.Mesh(geo, mat);
+        mesh.rotation.x = -Math.PI / 2; // lay flat on the ground
+        // Position just in front of the stage's front edge (z = stageWidth)
+        mesh.position.set(stageLength / 2, 0.01, stageWidth + labelH * 0.7);
+        scene.add(mesh);
+      })();
 
       // ── Orbit controls (manual — r128 doesn't bundle OrbitControls) ──
       let isDragging = false;
