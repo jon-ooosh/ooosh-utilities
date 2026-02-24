@@ -5,6 +5,8 @@
  * Accepts an array of items with HireHop IDs and quantities,
  * builds the items map, and adds them all in one API call.
  * 
+ * Also adds a job note with an optional 3D viewer share link.
+ * 
  * Uses the "b" prefix for hire/rental items (all staging equipment).
  * 
  * Env vars required:
@@ -18,7 +20,8 @@
  *       { hirehopId: 123, qty: 5 },
  *       { hirehopId: 456, qty: 2 },
  *       ...
- *     ]
+ *     ],
+ *     shareLink: "https://..."   // optional 3D viewer URL
  *   }
  * 
  * Returns:
@@ -59,7 +62,7 @@ exports.handler = async (event) => {
 
   try {
     const body = JSON.parse(event.body);
-    const { jobId, items } = body;
+    const { jobId, items, shareLink } = body;
 
     // Validate inputs
     if (!jobId || !/^\d+$/.test(String(jobId))) {
@@ -165,6 +168,17 @@ exports.handler = async (event) => {
 
     console.log(`✅ Successfully pushed ${totalQty} items to job ${jobId}`);
 
+    // ── Add a job note with the 3D viewer link (if provided) ──
+    let noteAdded = false;
+    if (shareLink) {
+      try {
+        noteAdded = await addJobNote(domain, token, jobId, totalQty, Object.keys(itemsMap).length, shareLink);
+      } catch (noteErr) {
+        // Note failure is non-fatal — items were already pushed successfully
+        console.warn('Failed to add job note (non-fatal):', noteErr.message);
+      }
+    }
+
     return {
       statusCode: 200,
       headers,
@@ -173,6 +187,7 @@ exports.handler = async (event) => {
         jobId: parseInt(jobId),
         itemTypes: Object.keys(itemsMap).length,
         totalQuantity: totalQty,
+        noteAdded,
         timestamp: new Date().toISOString(),
       }),
     };
@@ -190,3 +205,56 @@ exports.handler = async (event) => {
     };
   }
 };
+
+
+/**
+ * Add a job note to HireHop with staging details and 3D viewer link.
+ * Uses notes_save.php endpoint. Non-blocking — failure won't affect item push.
+ * 
+ * @param {string} domain - HireHop domain
+ * @param {string} token - API token
+ * @param {string} jobId - Job number
+ * @param {number} totalQty - Total items pushed
+ * @param {number} itemTypes - Number of distinct item types
+ * @param {string} shareLink - 3D viewer URL
+ * @returns {boolean} true if note was added successfully
+ */
+async function addJobNote(domain, token, jobId, totalQty, itemTypes, shareLink) {
+  const timestamp = new Date().toLocaleDateString('en-GB') + ' ' +
+                    new Date().toLocaleTimeString('en-GB');
+
+  const noteText = `🏗️ Staging Calculator — items added automatically
+${itemTypes} item types, ${totalQty} total pieces added.
+
+3D Stage Preview:
+${shareLink}
+
+Added: ${timestamp}`;
+
+  const url = `https://${domain}/php_functions/notes_save.php`;
+
+  const formData = new URLSearchParams();
+  formData.append('main_id', jobId);
+  formData.append('type', '1');        // 1 = job note
+  formData.append('note', noteText);
+  formData.append('token', token);
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body: formData.toString(),
+  });
+
+  const text = await response.text();
+
+  // Check for HTML error (auth failure)
+  if (text.trim().startsWith('<')) {
+    console.error('Note save returned HTML — possible auth error');
+    return false;
+  }
+
+  console.log(`✅ Job note added to job ${jobId}`);
+  return true;
+}

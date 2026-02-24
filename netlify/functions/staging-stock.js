@@ -2,9 +2,10 @@
  * Netlify Function: staging-stock
  * 
  * Fetches staging equipment stock from HireHop's export endpoint.
- * Queries categories 445 (Decks/Platforms) and 446 (Legs & Hardware),
- * parses item names to extract dimensions, and returns a structured
- * STOCK object matching the staging calculator's format.
+ * Queries categories 445 (Decks/Platforms), 446 (Legs & Hardware),
+ * and 448 (Staging Accessories — handrails, steps), parses item names
+ * to extract dimensions, and returns a structured STOCK object
+ * matching the staging calculator's format.
  * 
  * Includes a 10-minute in-memory cache to avoid hitting HireHop's
  * rate limit (60 req/min). The cache persists as long as the Netlify
@@ -22,6 +23,7 @@ const HIREHOP_EXPORT_URL = 'https://myhirehop.com/modules/stock/export_data.php'
 // Staging category IDs in HireHop
 const CATEGORY_DECKS = 445;
 const CATEGORY_HARDWARE = 446;
+const CATEGORY_ACCESSORIES = 448;
 
 // Combiner height offset (universal constant — physical property, won't change)
 const COMBINER_HEIGHT_OFFSET = 6;
@@ -102,21 +104,25 @@ exports.handler = async (event) => {
   }
 
   try {
-    // Fetch both categories in parallel
-    const [decksRaw, hardwareRaw] = await Promise.all([
+    // Fetch all three categories in parallel
+    const [decksRaw, hardwareRaw, accessoriesRaw] = await Promise.all([
       fetchCategory(exportId, exportKey, CATEGORY_DECKS),
       fetchCategory(exportId, exportKey, CATEGORY_HARDWARE),
+      fetchCategory(exportId, exportKey, CATEGORY_ACCESSORIES),
     ]);
 
     // Parse into structured STOCK format
+    // Handrails and steps can live in either hardware (446) or accessories (448)
+    const allHardwareAndAccessories = [...hardwareRaw, ...accessoriesRaw];
+
     const stock = {
       decks: parseDecks(decksRaw),
       legs: parseLegs(hardwareRaw),
       combiners: parseCombiners(hardwareRaw),
       screwjacks: parseScrewjacks(hardwareRaw),
       wheels: parseWheels(hardwareRaw),
-      handrails: parseHandrails(hardwareRaw),
-      steps: parseSteps(hardwareRaw),
+      handrails: parseHandrails(allHardwareAndAccessories),
+      steps: parseSteps(allHardwareAndAccessories),
     };
 
     const responseBody = JSON.stringify({
@@ -126,6 +132,7 @@ exports.handler = async (event) => {
       rawCounts: {
         decks: decksRaw.length,
         hardware: hardwareRaw.length,
+        accessories: accessoriesRaw.length,
       },
       timestamp: new Date().toISOString(),
       cached: false,
@@ -360,7 +367,11 @@ function parseWheels(rawItems) {
 }
 
 /**
- * Parse handrails. Names like "8' handrail"
+ * Parse handrails.
+ * Matches names like:
+ *   "Litedeck 8ft open-style handrail - staging"   (Xft format)
+ *   "8' handrail"                                    (X' format)
+ *   "Handrail 4ft"                                   (word then Xft)
  */
 function parseHandrails(rawItems) {
   const handrails = [];
@@ -371,7 +382,11 @@ function parseHandrails(rawItems) {
 
     if (!name.match(/handrail/i)) continue;
 
-    const ftMatch = name.match(/(\d+)'\s*/);
+    // Try "Xft" format first (e.g. "Litedeck 8ft open-style handrail")
+    let ftMatch = name.match(/(\d+)\s*ft/i);
+    // Fall back to "X'" format (e.g. "8' handrail")
+    if (!ftMatch) ftMatch = name.match(/(\d+)'\s*/);
+
     if (ftMatch) {
       handrails.push({
         name,
@@ -386,7 +401,11 @@ function parseHandrails(rawItems) {
 }
 
 /**
- * Parse steps. Names like "1ft step" or "2ft steps"
+ * Parse steps.
+ * Matches names like:
+ *   "Staging step / box tread - 1ft high"   (Xft format)
+ *   "2ft steps"                              (Xft format)
+ *   "1' step"                                (X' format)
  */
 function parseSteps(rawItems) {
   const steps = [];
@@ -395,11 +414,15 @@ function parseSteps(rawItems) {
     const name = item.NAME || item.name || '';
     const qty = parseInt(item.QTY || item.qty || 0);
 
-    if (!name.match(/\bsteps?\b/i)) continue;
+    if (!name.match(/\bsteps?\b/i) && !name.match(/\btread\b/i)) continue;
     // Avoid matching "footswitch" or other false positives
     if (name.match(/switch|wheel|riser/i)) continue;
 
-    const ftMatch = name.match(/(\d+)\s*ft/i);
+    // Try "Xft" format first
+    let ftMatch = name.match(/(\d+)\s*ft/i);
+    // Fall back to "X'" format
+    if (!ftMatch) ftMatch = name.match(/(\d+)'\s*/);
+
     if (ftMatch) {
       steps.push({
         name,

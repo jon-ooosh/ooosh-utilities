@@ -259,9 +259,6 @@
   <script>
     // ========================================================================
     // PARSE CONFIG FROM URL
-    // Supports two formats:
-    //   ?config={JSON}       — legacy (raw JSON, URL-encoded)
-    //   ?c={base64url}       — new (pako-compressed + base64url-encoded)
     // ========================================================================
 
     function parseConfig() {
@@ -271,7 +268,6 @@
       const compressed = params.get('c');
       if (compressed) {
         try {
-          // Base64url → standard base64 → binary → pako inflate → JSON
           const base64 = compressed.replace(/-/g, '+').replace(/_/g, '/');
           const binary = atob(base64);
           const bytes = new Uint8Array(binary.length);
@@ -282,7 +278,6 @@
           return JSON.parse(json);
         } catch (e) {
           console.error('Failed to decompress config:', e);
-          // Fall through to try legacy format
         }
       }
 
@@ -365,7 +360,6 @@
       scene.fog = new THREE.FogExp2(0x0c0f14, 0.008);
 
       // ── Scale: 1 unit = 1 inch (we'll convert to a reasonable 3D scale) ──
-      // Use a scale factor so the stage looks good in the viewport
       const SCALE = 1 / 12; // 1 foot = 1 unit in Three.js space
       const stageLength = cfg.l * SCALE;
       const stageWidth = cfg.w * SCALE;
@@ -424,56 +418,43 @@
       scene.add(gridHelper);
 
       // ── Materials ──
-      // Deck surface — dark carpet-covered Litedeck top
       const deckTopMat = new THREE.MeshStandardMaterial({
-        color: 0x1a1a1a,
-        roughness: 0.9,
-        metalness: 0.0,
+        color: 0x1a1a1a, roughness: 0.9, metalness: 0.0,
       });
-
-      // Deck edge — aluminium Litedeck truss frame
       const deckSideMat = new THREE.MeshStandardMaterial({
-        color: 0x999999,
-        roughness: 0.35,
-        metalness: 0.7,
+        color: 0x999999, roughness: 0.35, metalness: 0.7,
       });
-
-      // Deck underside — dark aluminium frame
       const deckFrameMat = new THREE.MeshStandardMaterial({
-        color: 0x666666,
-        roughness: 0.4,
-        metalness: 0.65,
+        color: 0x666666, roughness: 0.4, metalness: 0.65,
       });
-
-      // Truss diagonal material — slightly brighter aluminium
       const trussMat = new THREE.MeshStandardMaterial({
-        color: 0xaaaaaa,
-        roughness: 0.3,
-        metalness: 0.75,
+        color: 0xaaaaaa, roughness: 0.3, metalness: 0.75,
       });
-
-      // Leg material — steel
       const legMat = new THREE.MeshStandardMaterial({
-        color: 0x888888,
-        roughness: 0.3,
-        metalness: 0.8,
+        color: 0x888888, roughness: 0.3, metalness: 0.8,
       });
-
-      // Combiner material — darker steel
       const combinerMat = new THREE.MeshStandardMaterial({
-        color: 0x555555,
-        roughness: 0.4,
-        metalness: 0.7,
+        color: 0x555555, roughness: 0.4, metalness: 0.7,
+      });
+      // Handrail material — bright aluminium
+      const handrailMat = new THREE.MeshStandardMaterial({
+        color: 0xbbbbbb, roughness: 0.25, metalness: 0.8,
+      });
+      // Step material — dark with yellow safety edge
+      const stepMat = new THREE.MeshStandardMaterial({
+        color: 0x333333, roughness: 0.7, metalness: 0.3,
+      });
+      const stepEdgeMat = new THREE.MeshStandardMaterial({
+        color: 0xf5c518, roughness: 0.5, metalness: 0.2,
       });
 
       // ── Build Litedeck panels ──
-      const DECK_THICKNESS = 0.5 * SCALE;   // ~0.5" deck surface thickness
-      const GAP = 0.3 * SCALE;               // slight gap between decks
-      const TRUSS_H = 2.5 * SCALE;           // truss frame height below deck surface
-      const TRUSS_W = 0.4 * SCALE;           // truss tube thickness
-      const TRUSS_DIAG = 0.3 * SCALE;        // diagonal brace thickness
+      const DECK_THICKNESS = 0.5 * SCALE;
+      const GAP = 0.3 * SCALE;
+      const TRUSS_H = 2.5 * SCALE;
+      const TRUSS_W = 0.4 * SCALE;
+      const TRUSS_DIAG = 0.3 * SCALE;
 
-      // Helper: add a truss rail (horizontal bar along an edge)
       function addRail(px, py, pz, sx, sy, sz, mat) {
         const geo = new THREE.BoxGeometry(sx, sy, sz);
         const mesh = new THREE.Mesh(geo, mat || deckSideMat);
@@ -482,14 +463,12 @@
         scene.add(mesh);
       }
 
-      // Helper: add a diagonal brace between two points
       function addDiagonal(x1, y1, z1, x2, y2, z2) {
         const ddx = x2 - x1, ddy = y2 - y1, ddz = z2 - z1;
         const length = Math.sqrt(ddx*ddx + ddy*ddy + ddz*ddz);
         const geo = new THREE.BoxGeometry(TRUSS_DIAG, length, TRUSS_DIAG);
         const mesh = new THREE.Mesh(geo, trussMat);
         mesh.position.set((x1+x2)/2, (y1+y2)/2, (z1+z2)/2);
-        // Rotate to point from start to end
         const dir = new THREE.Vector3(ddx, ddy, ddz).normalize();
         const up = new THREE.Vector3(0, 1, 0);
         const quat = new THREE.Quaternion().setFromUnitVectors(up, dir);
@@ -503,18 +482,13 @@
         const z = dy * SCALE;
         const deckL = dl * SCALE - GAP;
         const deckW = dw * SCALE - GAP;
-        const cx = x + (deckL + GAP) / 2;    // deck center X
-        const cz = z + (deckW + GAP) / 2;    // deck center Z
+        const cx = x + (deckL + GAP) / 2;
+        const cz = z + (deckW + GAP) / 2;
 
         // ── Dark carpet top surface ──
         const topGeo = new THREE.BoxGeometry(deckL, DECK_THICKNESS, deckW);
         const materials = [
-          deckSideMat,   // +X
-          deckSideMat,   // -X
-          deckTopMat,    // +Y (top — dark carpet)
-          deckFrameMat,  // -Y (bottom)
-          deckSideMat,   // +Z
-          deckSideMat,   // -Z
+          deckSideMat, deckSideMat, deckTopMat, deckFrameMat, deckSideMat, deckSideMat,
         ];
         const deckMesh = new THREE.Mesh(topGeo, materials);
         deckMesh.position.set(cx, stageHeight - DECK_THICKNESS / 2, cz);
@@ -523,31 +497,23 @@
         scene.add(deckMesh);
 
         // ── Litedeck truss edge frame ──
-        // Top and bottom horizontal rails along each edge, plus diagonal braces
         const trussTop = stageHeight - DECK_THICKNESS;
         const trussBot = trussTop - TRUSS_H;
-        const trussRailMid = trussBot + TRUSS_H / 2;
 
-        // Four edges: front (+Z), back (-Z), left (-X), right (+X)
         const halfL = deckL / 2;
         const halfW = deckW / 2;
 
-        // Edge definitions: [startX, startZ, endX, endZ, lengthDir, isLongEdge]
         const edges = [
-          // Front edge (+Z side)
-          { pos: [cx, trussRailMid, cz + halfW], len: deckL, thick: TRUSS_W, isX: true },
-          // Back edge (-Z side)
-          { pos: [cx, trussRailMid, cz - halfW], len: deckL, thick: TRUSS_W, isX: true },
-          // Right edge (+X side)
-          { pos: [cx + halfL, trussRailMid, cz], len: deckW, thick: TRUSS_W, isX: false },
-          // Left edge (-X side)
-          { pos: [cx - halfL, trussRailMid, cz], len: deckW, thick: TRUSS_W, isX: false },
+          { pos: [cx, 0, cz + halfW], len: deckL, isX: true },
+          { pos: [cx, 0, cz - halfW], len: deckL, isX: true },
+          { pos: [cx + halfL, 0, cz], len: deckW, isX: false },
+          { pos: [cx - halfL, 0, cz], len: deckW, isX: false },
         ];
 
         for (const edge of edges) {
-          const [ex, ey, ez] = edge.pos;
+          const [ex, , ez] = edge.pos;
+          const trussRailMid = trussBot + TRUSS_H / 2;
 
-          // Top rail (just under deck surface)
           if (edge.isX) {
             addRail(ex, trussTop - TRUSS_W/2, ez, edge.len, TRUSS_W, TRUSS_W);
             addRail(ex, trussBot + TRUSS_W/2, ez, edge.len, TRUSS_W, TRUSS_W);
@@ -556,7 +522,6 @@
             addRail(ex, trussBot + TRUSS_W/2, ez, TRUSS_W, TRUSS_W, edge.len);
           }
 
-          // Diagonal V-braces (triangular truss pattern)
           const segments = Math.max(2, Math.round(edge.len / (4 * SCALE)));
           const segLen = edge.len / segments;
 
@@ -566,7 +531,6 @@
             const t1 = t0 + segLen;
 
             if (edge.isX) {
-              // V-brace: top-left → bottom-mid → top-right
               addDiagonal(ex + t0, trussTop - TRUSS_W, ez, ex + tMid, trussBot + TRUSS_W, ez);
               addDiagonal(ex + tMid, trussBot + TRUSS_W, ez, ex + t1, trussTop - TRUSS_W, ez);
             } else {
@@ -575,17 +539,16 @@
             }
           }
 
-          // Vertical end posts at each edge corner
           if (edge.isX) {
-            addRail(ex - halfL, ey, ez, TRUSS_W, TRUSS_H, TRUSS_W);
-            addRail(ex + halfL, ey, ez, TRUSS_W, TRUSS_H, TRUSS_W);
+            addRail(ex - halfL, trussRailMid, ez, TRUSS_W, TRUSS_H, TRUSS_W);
+            addRail(ex + halfL, trussRailMid, ez, TRUSS_W, TRUSS_H, TRUSS_W);
           } else {
-            addRail(ex, ey, ez - edge.len/2, TRUSS_W, TRUSS_H, TRUSS_W);
-            addRail(ex, ey, ez + edge.len/2, TRUSS_W, TRUSS_H, TRUSS_W);
+            addRail(ex, trussRailMid, ez - edge.len/2, TRUSS_W, TRUSS_H, TRUSS_W);
+            addRail(ex, trussRailMid, ez + edge.len/2, TRUSS_W, TRUSS_H, TRUSS_W);
           }
         }
 
-        // ── Aluminium cross-members under deck (internal frame) ──
+        // ── Cross-members under deck ──
         const FRAME_H = 1.5 * SCALE;
         const FRAME_W = 0.8 * SCALE;
         const frameY = stageHeight - DECK_THICKNESS - FRAME_H / 2;
@@ -601,14 +564,26 @@
 
       // ── Build legs ──
       const LEG_RADIUS = 0.6 * SCALE;
-      const COMBINER_HEIGHT = 6 * SCALE;    // 6" combiner plate height
+      const COMBINER_HEIGHT = 6 * SCALE;
       const usesCombiners = cfg.cm !== 'none';
 
+      // Stage total dimensions in 3D units (for perimeter detection)
+      const totalLengthScaled = cfg.l * SCALE;
+      const totalWidthScaled = cfg.w * SCALE;
+
       for (const [jx, jy, jtype] of cfg.j) {
-        const x = jx * SCALE;
-        const z = jy * SCALE;
+        let x = jx * SCALE;
+        let z = jy * SCALE;
         const baseY = 0;
         const topY = stageHeight - DECK_THICKNESS;
+
+        // ── Nudge perimeter legs inward so they tuck under the deck ──
+        // Legs on the outer edge of the stage would otherwise protrude
+        const inset = LEG_RADIUS * 1.2;  // Slightly more than radius for clean tuck
+        if (jx === 0) x += inset;
+        else if (jx === cfg.l) x -= inset;
+        if (jy === 0) z += inset;
+        else if (jy === cfg.w) z -= inset;
 
         if (usesCombiners && jtype !== 'solo') {
           // Combiner plate
@@ -632,7 +607,6 @@
             legMesh.castShadow = true;
             scene.add(legMesh);
 
-            // Base plate
             const basePlateGeo = new THREE.CylinderGeometry(LEG_RADIUS * 2, LEG_RADIUS * 2, 0.3 * SCALE, 12);
             const basePlateMesh = new THREE.Mesh(basePlateGeo, combinerMat);
             basePlateMesh.position.set(x, 0.15 * SCALE, z);
@@ -640,7 +614,7 @@
             scene.add(basePlateMesh);
           }
         } else {
-          // Solo corner — individual legs per deck
+          // Solo corner — individual leg
           const legH = topY - baseY;
           if (legH > 0) {
             const legGeo = new THREE.CylinderGeometry(LEG_RADIUS, LEG_RADIUS, legH, 12);
@@ -649,12 +623,191 @@
             legMesh.castShadow = true;
             scene.add(legMesh);
 
-            // Base plate
             const basePlateGeo = new THREE.CylinderGeometry(LEG_RADIUS * 2, LEG_RADIUS * 2, 0.3 * SCALE, 12);
             const basePlateMesh = new THREE.Mesh(basePlateGeo, combinerMat);
             basePlateMesh.position.set(x, 0.15 * SCALE, z);
             basePlateMesh.castShadow = true;
             scene.add(basePlateMesh);
+          }
+        }
+      }
+
+      // ── Build handrails and steps from accessories config ──
+      const acc = cfg.acc || {};
+      const HANDRAIL_HEIGHT = 3.5 * SCALE;  // ~3.5ft tall handrail
+      const HANDRAIL_POST_R = 0.25 * SCALE;
+      const HANDRAIL_BAR_R = 0.15 * SCALE;
+      const POST_SPACING = 4 * SCALE;       // Post every ~4ft
+
+      // Edge definitions: which direction each edge runs and where it sits
+      // In 3D: X = length direction, Z = width direction
+      const edgeDefs = {
+        front: { start: [0, stageWidth], end: [stageLength, stageWidth], axis: 'x', fixed: stageWidth },
+        back:  { start: [0, 0], end: [stageLength, 0], axis: 'x', fixed: 0 },
+        left:  { start: [0, 0], end: [0, stageWidth], axis: 'z', fixed: 0 },
+        right: { start: [stageLength, 0], end: [stageLength, stageWidth], axis: 'z', fixed: stageLength },
+      };
+
+      for (const [edgeName, sel] of Object.entries(acc)) {
+        if (!sel || (!sel.handrail && !sel.steps)) continue;
+        const def = edgeDefs[edgeName];
+        if (!def) continue;
+
+        const edgeLen = def.axis === 'x' ? stageLength : stageWidth;
+
+        // ── Calculate step gap position (if both handrail + steps on this edge) ──
+        const STEP_WIDTH_3D = 3 * SCALE;  // ~3ft visual width
+        const GAP_WIDTH = 4 * SCALE;      // 4ft gap in handrail (rounded from ~3ft step)
+        const hasGap = sel.handrail && sel.steps;
+        let gapStart = 0, gapEnd = 0, gapCenter = edgeLen / 2;
+
+        if (hasGap) {
+          // Determine step/gap position along the edge
+          const stepPos = sel.stepPosition || 'middle';
+          if (stepPos === 'front') {
+            gapCenter = GAP_WIDTH / 2 + 0.5 * SCALE;  // Offset slightly from corner
+          } else if (stepPos === 'back') {
+            gapCenter = edgeLen - GAP_WIDTH / 2 - 0.5 * SCALE;
+          } else {
+            gapCenter = edgeLen / 2;  // Middle (default)
+          }
+          gapStart = gapCenter - GAP_WIDTH / 2;
+          gapEnd = gapCenter + GAP_WIDTH / 2;
+        }
+
+        // ── Handrails ──
+        if (sel.handrail) {
+          // Build handrail segments — either full edge or split around step gap
+          const segments = [];
+          if (hasGap && gapStart > 0.5 * SCALE && gapEnd < edgeLen - 0.5 * SCALE) {
+            // Two segments: before and after the gap
+            if (gapStart > 1 * SCALE) segments.push({ from: 0, to: gapStart });
+            if (edgeLen - gapEnd > 1 * SCALE) segments.push({ from: gapEnd, to: edgeLen });
+          } else if (hasGap && gapStart <= 0.5 * SCALE) {
+            // Gap at start — single segment from gap end to edge end
+            if (edgeLen - gapEnd > 1 * SCALE) segments.push({ from: gapEnd, to: edgeLen });
+          } else if (hasGap && gapEnd >= edgeLen - 0.5 * SCALE) {
+            // Gap at end — single segment from start to gap start
+            if (gapStart > 1 * SCALE) segments.push({ from: 0, to: gapStart });
+          } else {
+            // No gap — full edge
+            segments.push({ from: 0, to: edgeLen });
+          }
+
+          for (const seg of segments) {
+            const segLen = seg.to - seg.from;
+            const segMid = (seg.from + seg.to) / 2;
+            const numPosts = Math.max(2, Math.floor(segLen / POST_SPACING) + 1);
+            const postStep = segLen / (numPosts - 1);
+
+            for (let i = 0; i < numPosts; i++) {
+              const t = seg.from + i * postStep;
+              let px, pz;
+              if (def.axis === 'x') {
+                px = t;
+                pz = def.fixed;
+              } else {
+                px = def.fixed;
+                pz = t;
+              }
+
+              // Vertical post
+              const postGeo = new THREE.CylinderGeometry(HANDRAIL_POST_R, HANDRAIL_POST_R, HANDRAIL_HEIGHT, 8);
+              const postMesh = new THREE.Mesh(postGeo, handrailMat);
+              postMesh.position.set(px, stageHeight + HANDRAIL_HEIGHT / 2, pz);
+              postMesh.castShadow = true;
+              scene.add(postMesh);
+            }
+
+            // Top rail bar for this segment
+            if (def.axis === 'x') {
+              const barGeo = new THREE.CylinderGeometry(HANDRAIL_BAR_R, HANDRAIL_BAR_R, segLen, 8);
+              const barMesh = new THREE.Mesh(barGeo, handrailMat);
+              barMesh.rotation.z = Math.PI / 2;
+              barMesh.position.set(segMid, stageHeight + HANDRAIL_HEIGHT, def.fixed);
+              barMesh.castShadow = true;
+              scene.add(barMesh);
+
+              // Mid rail
+              const midGeo = new THREE.CylinderGeometry(HANDRAIL_BAR_R * 0.8, HANDRAIL_BAR_R * 0.8, segLen, 8);
+              const midMesh = new THREE.Mesh(midGeo, handrailMat);
+              midMesh.rotation.z = Math.PI / 2;
+              midMesh.position.set(segMid, stageHeight + HANDRAIL_HEIGHT * 0.5, def.fixed);
+              midMesh.castShadow = true;
+              scene.add(midMesh);
+            } else {
+              const barGeo = new THREE.CylinderGeometry(HANDRAIL_BAR_R, HANDRAIL_BAR_R, segLen, 8);
+              const barMesh = new THREE.Mesh(barGeo, handrailMat);
+              barMesh.rotation.x = Math.PI / 2;
+              barMesh.position.set(def.fixed, stageHeight + HANDRAIL_HEIGHT, segMid);
+              barMesh.castShadow = true;
+              scene.add(barMesh);
+
+              const midGeo = new THREE.CylinderGeometry(HANDRAIL_BAR_R * 0.8, HANDRAIL_BAR_R * 0.8, segLen, 8);
+              const midMesh = new THREE.Mesh(midGeo, handrailMat);
+              midMesh.rotation.x = Math.PI / 2;
+              midMesh.position.set(def.fixed, stageHeight + HANDRAIL_HEIGHT * 0.5, segMid);
+              midMesh.castShadow = true;
+              scene.add(midMesh);
+            }
+          }
+        }
+
+        // ── Steps ──
+        if (sel.steps) {
+          const STEP_DEPTH = 2 * SCALE;    // ~2ft deep (how far out from stage)
+          const numSteps = Math.max(1, Math.round(stageHeight / (0.8 * SCALE)));
+          const stepRise = stageHeight / numSteps;
+
+          // Position steps based on stepPosition (uses gap centre if also has handrails)
+          const stepCenterAlongEdge = hasGap ? gapCenter : (() => {
+            const pos = sel.stepPosition || 'middle';
+            if (pos === 'front') return STEP_WIDTH_3D / 2 + 0.5 * SCALE;
+            if (pos === 'back') return edgeLen - STEP_WIDTH_3D / 2 - 0.5 * SCALE;
+            return edgeLen / 2;
+          })();
+
+          let baseX, baseZ, dirX, dirZ;
+          if (def.axis === 'x') {
+            baseX = stepCenterAlongEdge;
+            baseZ = def.fixed;
+            dirX = 0;
+            dirZ = (edgeName === 'front') ? 1 : -1;
+          } else {
+            baseX = def.fixed;
+            baseZ = stepCenterAlongEdge;
+            dirX = (edgeName === 'right') ? 1 : -1;
+            dirZ = 0;
+          }
+
+          for (let i = 0; i < numSteps; i++) {
+            const stepY = (i + 0.5) * stepRise;
+            const outward = (numSteps - i) * (STEP_DEPTH / numSteps);
+
+            const stepW = def.axis === 'x' ? STEP_WIDTH_3D : STEP_DEPTH;
+            const stepD = def.axis === 'x' ? STEP_DEPTH : STEP_WIDTH_3D;
+
+            const geo = new THREE.BoxGeometry(stepW, stepRise * 0.9, stepD);
+            const mesh = new THREE.Mesh(geo, stepMat);
+            mesh.position.set(
+              baseX + dirX * (outward + STEP_DEPTH * 0.5),
+              stepY,
+              baseZ + dirZ * (outward + STEP_DEPTH * 0.5)
+            );
+            mesh.castShadow = true;
+            mesh.receiveShadow = true;
+            scene.add(mesh);
+
+            // Yellow safety nosing on front edge of each step
+            const noseGeo = new THREE.BoxGeometry(stepW, stepRise * 0.15, 0.15 * SCALE);
+            const noseMesh = new THREE.Mesh(noseGeo, stepEdgeMat);
+            noseMesh.position.set(
+              baseX + dirX * (outward + STEP_DEPTH),
+              stepY + stepRise * 0.4,
+              baseZ + dirZ * (outward + STEP_DEPTH)
+            );
+            noseMesh.castShadow = true;
+            scene.add(noseMesh);
           }
         }
       }
@@ -695,7 +848,6 @@
         prevMouse = { x: e.clientX, y: e.clientY };
 
         if (isShiftDrag) {
-          // Pan
           const right = new THREE.Vector3();
           const up = new THREE.Vector3(0, 1, 0);
           camera.getWorldDirection(right);
@@ -704,7 +856,6 @@
           target.add(right.multiplyScalar(-dx * panSpeed));
           target.y += dy * panSpeed;
         } else {
-          // Rotate
           spherical.theta -= dx * 0.005;
           spherical.phi = Math.max(0.1, Math.min(Math.PI * 0.49, spherical.phi - dy * 0.005));
         }

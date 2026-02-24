@@ -770,6 +770,12 @@ async function fetchStock() {
     // Set the global STOCK object
     STOCK = data.stock;
 
+    // Ensure all expected arrays exist (backward compat with older stock endpoints)
+    if (!STOCK.handrails) STOCK.handrails = [];
+    if (!STOCK.steps) STOCK.steps = [];
+    if (!STOCK.screwjacks) STOCK.screwjacks = [];
+    if (!STOCK.wheels) STOCK.wheels = [];
+
     // Rebuild LEG_HEIGHTS from live data
     LEG_HEIGHTS = STOCK.legs.map(l => l.heightIn).sort((a, b) => a - b);
 
@@ -777,8 +783,22 @@ async function fetchStock() {
       decks: STOCK.decks.length,
       legs: STOCK.legs.length,
       combiners: `${STOCK.combiners.twoInOne.qty} × 2-in-1, ${STOCK.combiners.fourInOne.qty} × 4-in-1`,
+      handrails: STOCK.handrails.length,
+      steps: STOCK.steps.length,
       timestamp: data.timestamp,
     });
+
+    // Log handrail and step details for debugging
+    if (STOCK.handrails.length > 0) {
+      console.log('Handrails:', STOCK.handrails.map(h => `${h.name} (${h.qty}×, ${h.lengthIn}")`));
+    } else {
+      console.warn('⚠️ No handrails found in stock — check HireHop category 448');
+    }
+    if (STOCK.steps.length > 0) {
+      console.log('Steps:', STOCK.steps.map(s => `${s.name} (${s.qty}×, ${s.heightIn}" high)`));
+    } else {
+      console.warn('⚠️ No steps found in stock — check HireHop category 448');
+    }
 
     return true;
   } catch (err) {
@@ -1196,6 +1216,14 @@ async function handleCalculate(e) {
     return;
   }
 
+  // Reset accessory selections on new calculation
+  accessorySelections = {
+    front: { handrail: false, steps: false, stepPosition: 'middle' },
+    back: { handrail: false, steps: false, stepPosition: 'middle' },
+    left: { handrail: false, steps: false, stepPosition: 'middle' },
+    right: { handrail: false, steps: false, stepPosition: 'middle' },
+  };
+
   // Use orientation-optimised calculation
   currentResult = calculateBestOrientation({ length, width, height, unit, combinerMode });
 
@@ -1365,6 +1393,8 @@ function build3DViewUrl() {
     cm: r.input.combinerMode,
     // Display unit
     u: unit,
+    // Accessories: which edges have handrails/steps
+    acc: accessorySelections,
   };
 
   // Compress config using pako deflate + base64url encoding for shorter URLs
@@ -1667,8 +1697,8 @@ function renderResults(result) {
     </div>`;
   }
 
-  // Push to HireHop button (only if job number entered)
-  html += renderPushButton();
+  // Push to HireHop — persistent container with ID so it survives accessory re-renders
+  html += `<div id="push-section-container">${renderPushButton()}</div>`;
 
   resultsEl.innerHTML = html;
 }
@@ -1745,16 +1775,17 @@ function renderLayoutVisual(layout, totalLength, totalWidth, unit) {
 
 /**
  * Current accessory selections, keyed by edge name.
- * Each edge can be: 'none', 'handrail', 'steps'
+ * Each edge has independent handrail and steps toggles.
+ * Only one edge can have steps at a time.
  * 
  * "Front" and "Back" run along the stage LENGTH.
  * "Left" and "Right" run along the stage WIDTH.
  */
 let accessorySelections = {
-  front: 'none',
-  back: 'none',
-  left: 'none',
-  right: 'none',
+  front: { handrail: false, steps: false, stepPosition: 'middle' },
+  back: { handrail: false, steps: false, stepPosition: 'middle' },
+  left: { handrail: false, steps: false, stepPosition: 'middle' },
+  right: { handrail: false, steps: false, stepPosition: 'middle' },
 };
 
 /**
@@ -1805,6 +1836,37 @@ function calculateHandrailSections(edgeLengthIn, stepGapIn) {
 }
 
 /**
+ * Calculate the gap needed in a handrail run to accommodate steps.
+ * Steps are ~90cm wide. We round UP to the nearest handrail section
+ * length so the gap aligns with the modular handrail system.
+ * 
+ * @param {number} stageHeightIn - Stage height (to pick correct step)
+ * @returns {number} Gap in inches (0 if no suitable step)
+ */
+function calculateStepGapIn(stageHeightIn) {
+  const step = pickBestStep(stageHeightIn);
+  if (!step) return 0;
+
+  const stepWidthIn = getStepWidthIn(step);  // ~36" (90cm)
+
+  // Find the smallest handrail section length that's >= step width
+  if (!STOCK || !STOCK.handrails || STOCK.handrails.length === 0) return stepWidthIn;
+
+  const railLengths = STOCK.handrails
+    .map(h => h.lengthIn)
+    .filter(l => l > 0)
+    .sort((a, b) => a - b);
+
+  // Find smallest rail section >= step width
+  const fittingRail = railLengths.find(l => l >= stepWidthIn);
+  if (fittingRail) return fittingRail;
+
+  // If no single section is wide enough, use multiples of smallest
+  const smallest = railLengths[0] || 24;
+  return Math.ceil(stepWidthIn / smallest) * smallest;
+}
+
+/**
  * Pick the best step size for the current stage height.
  * Steps come in fixed heights (e.g. 1ft, 2ft).
  * We pick the step whose height is closest to (but not exceeding) stage height.
@@ -1840,7 +1902,11 @@ function getStepWidthIn(step) {
  */
 function calculateAccessories(result) {
   if (!result || !result.success) return [];
-  if (!STOCK || !STOCK.handrails || !STOCK.steps) return [];
+  if (!STOCK) return [];
+
+  // Ensure arrays exist
+  if (!STOCK.handrails) STOCK.handrails = [];
+  if (!STOCK.steps) STOCK.steps = [];
 
   const lengthIn = result.result.actualLength.inches;
   const widthIn = result.result.actualWidth.inches;
@@ -1857,28 +1923,18 @@ function calculateAccessories(result) {
     right: widthIn,
   };
 
-  // Steps go on ENDS (left/right = width edges).
-  // If someone puts steps on front/back (length edges), we allow it but warn
-  // if the step width exceeds the edge (e.g. 36" step on a 24" wide edge).
   const warnings = [];
   let stepsEntry = null;
   let stepEdge = null;
 
   // First pass: find which edge has steps (if any)
-  for (const [edge, selection] of Object.entries(accessorySelections)) {
-    if (selection === 'steps') {
+  for (const [edge, sel] of Object.entries(accessorySelections)) {
+    if (sel.steps) {
       stepEdge = edge;
       const step = pickBestStep(heightIn);
       if (step) {
         const stepWidth = getStepWidthIn(step);
         const edgeLen = edgeLengths[edge];
-
-        // Check orientation constraint: steps should ideally go on an END
-        // (left/right edges = along the width dimension)
-        if ((edge === 'front' || edge === 'back') && edgeLen > widthIn) {
-          // Steps on a long edge — might work but check step width vs edge accessibility
-          // Not necessarily wrong, just note it
-        }
 
         // Check if step width exceeds edge length
         if (stepWidth > edgeLen) {
@@ -1901,12 +1957,12 @@ function calculateAccessories(result) {
   }
 
   // Second pass: calculate handrails
-  for (const [edge, selection] of Object.entries(accessorySelections)) {
-    if (selection === 'handrail') {
+  for (const [edge, sel] of Object.entries(accessorySelections)) {
+    if (sel.handrail) {
       const edgeLen = edgeLengths[edge];
 
-      // If steps are on this same edge, leave a gap for the step width
-      const stepGap = (stepEdge === edge && stepsEntry) ? getStepWidthIn(pickBestStep(heightIn)) : 0;
+      // If steps are also on this edge, leave a gap for the step width
+      const stepGap = (stepEdge === edge) ? calculateStepGapIn(heightIn) : 0;
 
       const sections = calculateHandrailSections(edgeLen, stepGap);
 
@@ -1946,11 +2002,15 @@ function calculateAccessories(result) {
 
 /**
  * Render the accessories edge selector UI.
- * Shows after the main parts list, with dropdowns for each edge.
+ * Shows after the main parts list, with independent toggle buttons for each edge.
  */
 function renderAccessoriesSection(result) {
   if (!result || !result.success) return '';
-  if (!STOCK || !STOCK.handrails || !STOCK.steps) return '';
+  if (!STOCK) return '';
+
+  // Ensure arrays exist (might be undefined if stock endpoint is older version)
+  if (!STOCK.handrails) STOCK.handrails = [];
+  if (!STOCK.steps) STOCK.steps = [];
 
   const unit = result.input.unit;
   const lengthIn = result.result.actualLength.inches;
@@ -1966,21 +2026,14 @@ function renderAccessoriesSection(result) {
   if (heightIn >= 24) {  // 2ft+
     suggestions.push('🪜 Stage is ' + heightLabel + ' high — steps recommended for safe access.');
   }
-  // Check for open edges (any edge without handrail/steps)
+  // Check for open edges (any edge without handrail)
+  const hasAnySelection = Object.values(accessorySelections).some(s => s.handrail || s.steps);
   const openEdges = Object.entries(accessorySelections)
-    .filter(([_, sel]) => sel === 'none')
+    .filter(([_, sel]) => !sel.handrail)
     .map(([edge]) => edge);
   if (heightIn >= 24 && openEdges.length > 0) {
     suggestions.push('🛡️ Open edges detected — consider handrails for safety.');
   }
-
-  // Edge definitions for the visual selector
-  const edges = [
-    { key: 'back',  label: 'Back',  length: lengthIn, lengthLabel: lengthLabel, cssClass: 'edge-back' },
-    { key: 'left',  label: 'Left',  length: widthIn,  lengthLabel: widthLabel,  cssClass: 'edge-left' },
-    { key: 'right', label: 'Right', length: widthIn,  lengthLabel: widthLabel,  cssClass: 'edge-right' },
-    { key: 'front', label: 'Front', length: lengthIn, lengthLabel: lengthLabel, cssClass: 'edge-front' },
-  ];
 
   let html = `<div class="result-card accessories-card">
     <h2>🔧 Accessories</h2>`;
@@ -2084,7 +2137,7 @@ function renderAccessoriesSection(result) {
     }
 
     html += `</div>`;
-  } else if (Object.values(accessorySelections).some(s => s !== 'none')) {
+  } else if (hasAnySelection) {
     html += `<p style="color:#6b7280; margin-top:12px">No matching accessories found in stock.</p>`;
   }
 
@@ -2094,57 +2147,141 @@ function renderAccessoriesSection(result) {
 
 /**
  * Render a horizontal edge selector row (for front/back edges).
+ * Each edge has independent Handrail and Steps toggle buttons.
  */
 function renderEdgeRow(key, label, lengthLabel) {
   const sel = accessorySelections[key];
-  return `<div class="edge-row">
+  let html = `<div class="edge-row">
     <span class="edge-label">${label} <span class="edge-length">(${lengthLabel})</span></span>
     <div class="edge-options">
-      <button class="edge-btn ${sel === 'none' ? 'active' : ''}" onclick="setEdge('${key}','none')">None</button>
-      <button class="edge-btn ${sel === 'handrail' ? 'active' : ''}" onclick="setEdge('${key}','handrail')">🛡️ Handrail</button>
-      <button class="edge-btn ${sel === 'steps' ? 'active' : ''}" onclick="setEdge('${key}','steps')">🪜 Steps</button>
-    </div>
-  </div>`;
+      <button class="edge-btn ${!sel.handrail && !sel.steps ? 'active' : ''}" onclick="clearEdge('${key}')">None</button>
+      <button class="edge-btn ${sel.handrail ? 'active' : ''}" onclick="toggleEdge('${key}','handrail')">🛡️ Handrail</button>
+      <button class="edge-btn ${sel.steps ? 'active' : ''}" onclick="toggleEdge('${key}','steps')">🪜 Steps</button>
+    </div>`;
+
+  // Show step position selector when both handrail AND steps are on this edge
+  if (sel.handrail && sel.steps) {
+    html += renderStepPositionSelector(key, sel.stepPosition);
+  }
+
+  html += `</div>`;
+  return html;
 }
 
 /**
  * Render a vertical edge selector (for left/right edges).
+ * Each edge has independent Handrail and Steps toggle buttons.
  */
 function renderEdgeSide(key, label, lengthLabel) {
   const sel = accessorySelections[key];
-  return `<div class="edge-side">
+  let html = `<div class="edge-side">
     <span class="edge-label">${label} <span class="edge-length">(${lengthLabel})</span></span>
     <div class="edge-options edge-options-vertical">
-      <button class="edge-btn edge-btn-sm ${sel === 'none' ? 'active' : ''}" onclick="setEdge('${key}','none')">None</button>
-      <button class="edge-btn edge-btn-sm ${sel === 'handrail' ? 'active' : ''}" onclick="setEdge('${key}','handrail')">🛡️</button>
-      <button class="edge-btn edge-btn-sm ${sel === 'steps' ? 'active' : ''}" onclick="setEdge('${key}','steps')">🪜</button>
-    </div>
+      <button class="edge-btn edge-btn-sm ${!sel.handrail && !sel.steps ? 'active' : ''}" onclick="clearEdge('${key}')">None</button>
+      <button class="edge-btn edge-btn-sm ${sel.handrail ? 'active' : ''}" onclick="toggleEdge('${key}','handrail')">🛡️</button>
+      <button class="edge-btn edge-btn-sm ${sel.steps ? 'active' : ''}" onclick="toggleEdge('${key}','steps')">🪜</button>
+    </div>`;
+
+  // Show step position selector when both handrail AND steps are on this edge
+  if (sel.handrail && sel.steps) {
+    html += renderStepPositionSelector(key, sel.stepPosition);
+  }
+
+  html += `</div>`;
+  return html;
+}
+
+/**
+ * Render step position selector (front/middle/back).
+ * Shows when both handrail AND steps are on the same edge, so the user
+ * can choose where the gap in the handrail run goes for the steps.
+ * 
+ * Steps are ~90cm wide (~3ft), so the gap is rounded to the nearest
+ * handrail section size (2ft or 4ft).
+ * 
+ * @param {string} edge - Edge key (front/back/left/right)
+ * @param {string} currentPos - Current position (front/middle/back)
+ */
+function renderStepPositionSelector(edge, currentPos) {
+  const pos = currentPos || 'middle';
+  return `<div class="step-position-selector" style="margin-top:6px; display:flex; align-items:center; gap:6px; font-size:12px">
+    <span style="color:#6b7280">Steps position:</span>
+    <button class="edge-btn edge-btn-sm ${pos === 'front' ? 'active' : ''}" 
+      onclick="setStepPosition('${edge}','front')" style="font-size:11px; padding:2px 8px">◀ Front</button>
+    <button class="edge-btn edge-btn-sm ${pos === 'middle' ? 'active' : ''}" 
+      onclick="setStepPosition('${edge}','middle')" style="font-size:11px; padding:2px 8px">● Middle</button>
+    <button class="edge-btn edge-btn-sm ${pos === 'back' ? 'active' : ''}" 
+      onclick="setStepPosition('${edge}','back')" style="font-size:11px; padding:2px 8px">▶ Back</button>
   </div>`;
 }
 
 /**
- * Handle edge selection change — update state and re-render accessories section.
+ * Set the step position (front/middle/back) on a given edge.
+ * Only relevant when both steps AND handrails are on the same edge —
+ * controls where the gap appears in the handrail run.
  */
-function setEdge(edge, value) {
-  // Only one edge can have steps at a time
-  if (value === 'steps') {
+function setStepPosition(edge, position) {
+  if (accessorySelections[edge]) {
+    accessorySelections[edge].stepPosition = position;
+    refreshAccessoriesAndPush();
+  }
+}
+
+/**
+ * Toggle a specific accessory type on an edge.
+ * Handrails and steps are independent — you can have both on the same edge.
+ * Only one edge can have steps at a time.
+ */
+function toggleEdge(edge, type) {
+  // Toggle the selected type
+  accessorySelections[edge][type] = !accessorySelections[edge][type];
+
+  // If we just turned ON steps, turn them OFF on all other edges (only one step set)
+  if (type === 'steps' && accessorySelections[edge].steps) {
     for (const key of Object.keys(accessorySelections)) {
-      if (key !== edge && accessorySelections[key] === 'steps') {
-        accessorySelections[key] = 'none';
+      if (key !== edge) {
+        accessorySelections[key].steps = false;
       }
     }
   }
 
-  accessorySelections[edge] = value;
+  refreshAccessoriesAndPush();
+}
 
-  // Re-render just the accessories card
+/**
+ * Clear all accessories from an edge (set both handrail and steps to false).
+ */
+function clearEdge(edge) {
+  accessorySelections[edge].handrail = false;
+  accessorySelections[edge].steps = false;
+  accessorySelections[edge].stepPosition = 'middle';
+
+  refreshAccessoriesAndPush();
+}
+
+/**
+ * Re-render the accessories card and push button after an accessory change.
+ * Handles edge case where renderAccessoriesSection returns empty HTML gracefully.
+ */
+function refreshAccessoriesAndPush() {
   if (currentResult && currentResult.success) {
+    // Re-render accessories card
     const container = document.querySelector('.accessories-card');
     if (container) {
-      // Replace the entire accessories card
-      const temp = document.createElement('div');
-      temp.innerHTML = renderAccessoriesSection(currentResult);
-      container.replaceWith(temp.firstElementChild);
+      const newHtml = renderAccessoriesSection(currentResult);
+      if (newHtml) {
+        const temp = document.createElement('div');
+        temp.innerHTML = newHtml;
+        if (temp.firstElementChild) {
+          container.replaceWith(temp.firstElementChild);
+        }
+      }
+    }
+
+    // Re-render push button (accessories affect what gets pushed)
+    const pushContainer = document.getElementById('push-section-container');
+    if (pushContainer) {
+      pushContainer.innerHTML = renderPushButton();
     }
   }
 }
@@ -2157,6 +2294,7 @@ function setEdge(edge, value) {
 /**
  * Collect all items (main parts + accessories) and push to HireHop job.
  * Shows a confirmation dialog first.
+ * Also sends the 3D viewer share link as a job note.
  */
 async function pushToJob() {
   if (!currentResult || !currentResult.success) return;
@@ -2186,7 +2324,7 @@ async function pushToJob() {
   }
 
   if (items.length === 0) {
-    alert('No items with HireHop IDs to push.');
+    alert('No items with HireHop IDs to add.');
     return;
   }
 
@@ -2194,7 +2332,7 @@ async function pushToJob() {
   const totalQty = items.reduce((sum, i) => sum + i.qty, 0);
   const itemList = items.map(i => `  ${i.qty}× ${i.name}`).join('\n');
   const confirmed = confirm(
-    `Push ${items.length} item types (${totalQty} total) to Job ${jobId}?\n\n${itemList}\n\nThis will ADD items to the job (won't replace existing items).`
+    `Add ${items.length} item types (${totalQty} total) to Job ${jobId}?\n\n${itemList}\n\nThis will ADD items to the job (won't replace existing items).`
   );
 
   if (!confirmed) return;
@@ -2203,8 +2341,11 @@ async function pushToJob() {
   const btn = document.getElementById('push-to-job-btn');
   if (btn) {
     btn.disabled = true;
-    btn.textContent = '⏳ Pushing…';
+    btn.textContent = '⏳ Adding…';
   }
+
+  // Build the 3D viewer share link to include in the job note
+  const shareLink = build3DViewUrl();
 
   try {
     const response = await fetch('/.netlify/functions/staging-push', {
@@ -2213,6 +2354,7 @@ async function pushToJob() {
       body: JSON.stringify({
         jobId: jobId,
         items: items.map(i => ({ hirehopId: i.hirehopId, qty: i.qty })),
+        shareLink: shareLink || undefined,
       }),
     });
 
@@ -2220,10 +2362,10 @@ async function pushToJob() {
 
     if (data.success) {
       if (btn) {
-        btn.textContent = '✅ Pushed!';
+        btn.textContent = '✅ Added!';
         btn.classList.add('btn-success');
         setTimeout(() => {
-          btn.textContent = '📤 Push to Job';
+          btn.textContent = `📤 Add to Job ${jobId}`;
           btn.classList.remove('btn-success');
           btn.disabled = false;
         }, 3000);
@@ -2233,34 +2375,48 @@ async function pushToJob() {
     }
 
   } catch (err) {
-    console.error('Push to job failed:', err);
+    console.error('Add to job failed:', err);
     if (btn) {
       btn.textContent = '❌ Failed';
       btn.disabled = false;
       setTimeout(() => {
-        btn.textContent = '📤 Push to Job';
+        btn.textContent = `📤 Add to Job ${jobId}`;
       }, 3000);
     }
-    alert(`Failed to push to job: ${err.message}`);
+    alert(`Failed to add to job: ${err.message}`);
   }
 }
 
 /**
- * Render the "Push to Job" button.
- * Only shows when a job number is entered.
+ * Render the "Add to Job" button.
+ * Always visible — shows disabled state when no job number entered.
  */
 function renderPushButton() {
-  const jobId = document.getElementById('job-number')?.value?.trim();
-  if (!jobId || !currentResult || !currentResult.success) return '';
+  if (!currentResult || !currentResult.success) return '';
 
-  return `<div class="result-card push-card" style="text-align:center">
-    <button id="push-to-job-btn" class="btn btn-calculate" 
-      style="padding:12px 32px; font-size:15px; background:linear-gradient(135deg, #059669 0%, #10b981 100%)"
-      onclick="pushToJob()">
-      📤 Push to Job ${jobId}
-    </button>
-    <p style="font-size:12px; color:#6b7280; margin-top:8px">
-      Adds all items (including accessories) to HireHop job. Won't replace existing items.
-    </p>
-  </div>`;
+  const jobId = document.getElementById('job-number')?.value?.trim();
+  const hasJob = jobId && /^\d+$/.test(jobId);
+
+  if (hasJob) {
+    return `<div class="result-card push-card" style="text-align:center">
+      <button id="push-to-job-btn" class="btn btn-calculate" 
+        style="padding:12px 32px; font-size:15px; background:linear-gradient(135deg, #059669 0%, #10b981 100%)"
+        onclick="pushToJob()">
+        📤 Add to Job ${jobId}
+      </button>
+      <p style="font-size:12px; color:#6b7280; margin-top:8px">
+        Adds all items (including accessories) to HireHop job. Won't replace existing items.
+      </p>
+    </div>`;
+  } else {
+    return `<div class="result-card push-card" style="text-align:center">
+      <button class="btn btn-calculate" disabled
+        style="padding:12px 32px; font-size:15px; background:#94a3b8; cursor:not-allowed">
+        📤 Add to HireHop Job
+      </button>
+      <p style="font-size:12px; color:#6b7280; margin-top:8px">
+        Enter a HireHop job number above to add items directly.
+      </p>
+    </div>`;
+  }
 }
