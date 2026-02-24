@@ -343,20 +343,14 @@
       // ── Apply rotation if requested ──
       // When cfg.rot=true, the stage length and width axes are swapped to match
       // the rotated 2D layout. We transpose deck coords and swap dimensions.
+      // IMPORTANT: cfg.acc is NOT remapped here. accessorySelections were already
+      // remapped by rotateStageLayout() before being serialised into the URL, so
+      // the acc data arrives already in the correct rotated coordinate frame.
       if (cfg.rot) {
         [cfg.l, cfg.w] = [cfg.w, cfg.l];
         cfg.d = cfg.d.map(([x, y, dl, dw]) => [y, x, dw, dl]);
         cfg.j = cfg.j.map(([x, y, t]) => [y, x, t]);
-        // Remap accessory edge selections to match the same CW rotation applied in the 2D view
-        if (cfg.acc) {
-          const old = { ...cfg.acc };
-          cfg.acc = {
-            front: old.right || { handrail: false, steps: false },
-            left:  old.front || { handrail: false, steps: false },
-            back:  old.left  || { handrail: false, steps: false },
-            right: old.back  || { handrail: false, steps: false },
-          };
-        }
+        // cfg.acc left as-is — already correctly rotated
       }
 
       // ── Renderer ──
@@ -845,25 +839,27 @@
         }
       }
 
-      // ── Audience label — flat canvas-texture plane on the ground at the front edge ──
-      // "Front" is at z = stageWidth. We paint a "▼ AUDIENCE" text onto a canvas,
-      // turn it into a Three.js texture, and lay it flat on the ground just outside the stage.
+      // ── Audience label — vertical sign on the front face of the stage ──
+      // "Front" (audience side) is at z = stageWidth.
+      // Hanging it vertically on the front face means it's always clearly visible
+      // from the camera regardless of step positions or rotation, and never
+      // ends up underneath the steps like a flat ground label would.
       (function addAudienceLabel() {
         const labelCanvas = document.createElement('canvas');
         labelCanvas.width = 512;
-        labelCanvas.height = 96;
+        labelCanvas.height = 80;
         const ctx = labelCanvas.getContext('2d');
-        ctx.clearRect(0, 0, 512, 96);
-        ctx.font = 'bold 36px Arial, sans-serif';
+        ctx.clearRect(0, 0, 512, 80);
+        ctx.font = 'bold 32px Arial, sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillStyle = '#64748b';
-        ctx.fillText('▼  AUDIENCE', 256, 48);
+        ctx.fillStyle = '#94a3b8';
+        ctx.fillText('\u25c4  AUDIENCE  \u25ba', 256, 40);
 
         const texture = new THREE.CanvasTexture(labelCanvas);
-        // Size the plane relative to the stage's front edge width
-        const labelW = stageLength * 0.65;
-        const labelH = labelW * (96 / 512); // maintain aspect ratio
+        // Size relative to the front edge width
+        const labelW = Math.min(stageLength * 0.6, stageLength - 0.2);
+        const labelH = labelW * (80 / 512);
         const geo = new THREE.PlaneGeometry(labelW, labelH);
         const mat = new THREE.MeshBasicMaterial({
           map: texture,
@@ -872,9 +868,9 @@
           side: THREE.DoubleSide,
         });
         const mesh = new THREE.Mesh(geo, mat);
-        mesh.rotation.x = -Math.PI / 2; // lay flat on the ground
-        // Position just in front of the stage's front edge (z = stageWidth)
-        mesh.position.set(stageLength / 2, 0.01, stageWidth + labelH * 0.7);
+        // No x-rotation — stays vertical (default PlaneGeometry faces +z)
+        // Centred on the front face, halfway up the stage height
+        mesh.position.set(stageLength / 2, stageHeight * 0.45, stageWidth + 0.02);
         scene.add(mesh);
       })();
 
