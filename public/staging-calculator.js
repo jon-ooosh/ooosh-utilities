@@ -7,6 +7,10 @@
  * 
  * v2.0 - Live HireHop stock (no hardcoded data), orientation
  *         optimization, unit toggle pill, ft/in split fields
+ * v2.5 - Fix: action/push buttons moved to static HTML containers so
+ *         accessories re-renders can never wipe them.
+ *       - Fix: availability is cached per date range; no redundant
+ *         API calls when re-calculating with the same dates.
  */
 
 // ============================================================================
@@ -16,6 +20,12 @@
 let STOCK = null;          // Set by fetchStock()
 let LEG_HEIGHTS = [];      // Rebuilt after stock loads
 let AVAILABILITY = null;   // Set by fetchAvailability() — date-specific availability data
+
+// ── Availability caching ──
+// Tracks the last date range we fetched availability for.
+// If the user clicks Calculate again with the same dates, we reuse AVAILABILITY
+// instead of hitting the HireHop API again (prevents rate-limit issues).
+let lastAvailabilityFetch = null;  // { startDate, endDate } or null
 
 // Combiner height offset in inches (physical constant — the combiner plate is 6" tall)
 const COMBINER_HEIGHT_OFFSET = 6;
@@ -958,6 +968,10 @@ async function fetchJobDates(jobId) {
       document.getElementById('avail-end').value = endDate;
     }
 
+    // Changing dates invalidates the availability cache
+    lastAvailabilityFetch = null;
+    AVAILABILITY = null;
+
     // Populate client display
     clientDisplay.classList.add('loaded');
     clientDisplay.innerHTML = name
@@ -1057,6 +1071,14 @@ document.addEventListener('DOMContentLoaded', async () => {
 // LOADING & ERROR STATES
 // ============================================================================
 
+/** Clear the persistent action/push containers (called on loading/error states) */
+function clearPersistentContainers() {
+  const actionContainer = document.getElementById('action-buttons-container');
+  if (actionContainer) actionContainer.innerHTML = '';
+  const pushContainer = document.getElementById('push-section-container');
+  if (pushContainer) pushContainer.innerHTML = '';
+}
+
 function showLoading() {
   const form = document.getElementById('calc-form');
   const btn = form.querySelector('.btn-calculate');
@@ -1070,6 +1092,9 @@ function showLoading() {
     <div class="loading-spinner"></div>
     <span>Loading stock from HireHop…</span>
   </div>`;
+
+  // Clear action/push buttons while loading
+  clearPersistentContainers();
 }
 
 function hideLoading() {
@@ -1096,6 +1121,9 @@ function showStockError() {
     <p>The staging calculator needs live stock data. Please check your internet connection and try refreshing the page.</p>
     <button class="chip" onclick="location.reload()" style="margin-top:10px">Refresh page</button>
   </div>`;
+
+  // Clear action/push buttons on error
+  clearPersistentContainers();
 }
 
 
@@ -1228,28 +1256,46 @@ async function handleCalculate(e) {
   currentResult = calculateBestOrientation({ length, width, height, unit, combinerMode });
 
   if (currentResult.success) {
-    // If dates are set, fetch availability before rendering
     const startDate = document.getElementById('avail-start').value;
     const endDate = document.getElementById('avail-end').value;
+    const normalizedEnd = endDate || startDate;
 
     if (startDate) {
-      // Show a brief loading indicator
-      const resultsEl = document.getElementById('results');
-      resultsEl.classList.remove('hidden');
-      resultsEl.innerHTML = `<div class="loading-banner">
-        <div class="loading-spinner"></div>
-        <span>Checking availability for ${startDate}${endDate ? ' → ' + endDate : ''}…</span>
-      </div>`;
+      // ── Availability caching ──
+      // Only hit the HireHop API if the dates have changed since the last fetch.
+      // This prevents redundant calls (and rate-limit issues) when the user clicks
+      // Calculate multiple times with the same date range.
+      const cachedDatesMatch = lastAvailabilityFetch &&
+        lastAvailabilityFetch.startDate === startDate &&
+        lastAvailabilityFetch.endDate === normalizedEnd &&
+        AVAILABILITY !== null;
 
-      const availLoaded = await fetchAvailability(startDate, endDate || startDate);
-      if (!availLoaded) {
-        // Availability failed — render without it but show a warning
-        AVAILABILITY = null;
-        console.warn('Availability check failed — showing stock totals only');
+      if (cachedDatesMatch) {
+        console.log(`Availability cache hit for ${startDate} → ${normalizedEnd} — skipping API call`);
+      } else {
+        // Show a brief loading indicator while fetching
+        const resultsEl = document.getElementById('results');
+        resultsEl.classList.remove('hidden');
+        resultsEl.innerHTML = `<div class="loading-banner">
+          <div class="loading-spinner"></div>
+          <span>Checking availability for ${startDate}${endDate ? ' → ' + endDate : ''}…</span>
+        </div>`;
+
+        const availLoaded = await fetchAvailability(startDate, normalizedEnd);
+        if (availLoaded) {
+          // Record what we fetched so we can skip next time if dates are the same
+          lastAvailabilityFetch = { startDate, endDate: normalizedEnd };
+        } else {
+          // Availability failed — render without it but show stock totals
+          AVAILABILITY = null;
+          lastAvailabilityFetch = null;
+          console.warn('Availability check failed — showing stock totals only');
+        }
       }
     } else {
-      // No dates — clear any previous availability data
+      // No dates entered — clear any cached availability so stale data isn't shown
       AVAILABILITY = null;
+      lastAvailabilityFetch = null;
     }
 
     renderResults(currentResult);
@@ -1291,6 +1337,9 @@ function renderError(result) {
   }
 
   resultsEl.innerHTML = html;
+
+  // Clear action/push buttons on error state
+  clearPersistentContainers();
 }
 
 function applySuggestion(dim, inches) {
@@ -1344,7 +1393,7 @@ async function recalculateStockOnly() {
   });
 
   if (currentResult.success) {
-    // Re-fetch availability if dates are set (availability data may already be loaded)
+    // Re-use existing availability data if we have it (no need to re-fetch)
     const startDate = document.getElementById('avail-start').value;
     const endDate = document.getElementById('avail-end').value;
     if (startDate && !AVAILABILITY) {
@@ -1686,13 +1735,16 @@ function renderResults(result) {
     </div>`;
   }
 
-  // Action buttons: 3D view, share link, push to HireHop — all grouped at the bottom
-  html += `<div id="action-buttons-container">${renderActionButtons()}</div>`;
-
-  // Push to HireHop — persistent container with ID so it survives accessory re-renders
-  html += `<div id="push-section-container">${renderPushButton()}</div>`;
-
+  // Set the results HTML — this does NOT include action/push buttons
   resultsEl.innerHTML = html;
+
+  // ── Update the persistent action/push containers ──
+  // These live OUTSIDE the results div in the HTML, so they are never
+  // wiped when resultsEl.innerHTML is replaced (on recalc or accessories toggle).
+  const actionContainer = document.getElementById('action-buttons-container');
+  if (actionContainer) actionContainer.innerHTML = renderActionButtons();
+  const pushContainer = document.getElementById('push-section-container');
+  if (pushContainer) pushContainer.innerHTML = renderPushButton();
 }
 
 
@@ -2065,7 +2117,8 @@ function renderAccessoriesSection(result) {
   // Front edge (bottom)
   html += renderEdgeRow('front', 'Front (audience)', lengthLabel);
 
-  html += `</div></div>`;
+  // Close stage-edge-visual, edge-grid, and edge-selector
+  html += `</div></div></div>`;
 
   // Accessory parts breakdown
   const accessoryParts = calculateAccessories(result);
@@ -2133,6 +2186,7 @@ function renderAccessoriesSection(result) {
     html += `<p style="color:#6b7280; margin-top:12px">No matching accessories found in stock.</p>`;
   }
 
+  // Close the result-card div
   html += `</div>`;
   return html;
 }
@@ -2253,8 +2307,10 @@ function clearEdge(edge) {
 
 /**
  * Re-render the accessories card and push button after an accessory change.
- * Uses independent try-catch blocks so a failure in accessories rendering
- * won't prevent the push button from updating.
+ * The accessories container is inside the results div.
+ * The action/push containers are OUTSIDE the results div (static HTML), so
+ * they will always be found by getElementById regardless of what happens
+ * inside the results div.
  */
 function refreshAccessoriesAndPush() {
   if (!currentResult || !currentResult.success) return;
@@ -2269,7 +2325,9 @@ function refreshAccessoriesAndPush() {
     console.warn('Accessories re-render failed (non-fatal):', accErr);
   }
 
-  // Re-render push button + action buttons (always runs even if accessories failed)
+  // Re-render the persistent action/push containers.
+  // These live in the HTML file outside the results div, so they are
+  // immune to anything that happens inside the results div.
   try {
     const pushContainer = document.getElementById('push-section-container');
     if (pushContainer) {

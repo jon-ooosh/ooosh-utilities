@@ -123,10 +123,19 @@
     <!-- Results (populated by JS) -->
     <div id="results" class="results hidden"></div>
 
+    <!--
+      Action buttons and push-to-job live here, OUTSIDE the results div.
+      This means they are permanent DOM fixtures — no innerHTML operation
+      on the results div or accessories container can ever wipe them.
+      JS updates their *content* directly via getElementById.
+    -->
+    <div id="action-buttons-container"></div>
+    <div id="push-section-container"></div>
+
   </div>
 
   <!-- Pako for URL compression (tiny — ~13KB gzipped) -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"></script>
-  <script src="/staging-calculator.js?v=2.4"></script>
+  <script src="/staging-calculator.js?v=2.5"></script>
 </body>
 </html>
