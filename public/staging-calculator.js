@@ -1806,6 +1806,11 @@ function renderLayoutVisual(layout, totalLength, totalWidth, unit) {
     font-family="Inter, sans-serif"
     transform="rotate(-90, ${padding - 10}, ${svgHeight / 2})">← ${totalWidthLabel} →</text>`;
 
+  // "Audience" label at the bottom — the front/audience edge is always at the bottom of the layout
+  svgContent += `<text x="${svgWidth / 2}" y="${svgHeight - 2}"
+    text-anchor="middle" font-size="12" fill="#94a3b8" font-weight="500"
+    font-family="Inter, sans-serif">▼ Audience</text>`;
+
   return `<svg viewBox="0 0 ${svgWidth} ${svgHeight}" width="100%" 
     style="max-width:${svgWidth}px" xmlns="http://www.w3.org/2000/svg">
     ${svgContent}
@@ -1968,45 +1973,50 @@ function calculateAccessories(result) {
   };
 
   const warnings = [];
-  let stepsEntry = null;
-  let stepEdge = null;
+  const stepEntries = {};  // name → { part entry } — aggregates qty across edges
 
-  // First pass: find which edge has steps (if any)
+  // First pass: find all edges with steps and calculate handrail gaps
+  // We check per-edge now (any edge can independently have steps)
   for (const [edge, sel] of Object.entries(accessorySelections)) {
     if (sel.steps) {
-      stepEdge = edge;
       const step = pickBestStep(heightIn);
-      if (step) {
-        const stepWidth = getStepWidthIn(step);
-        const edgeLen = edgeLengths[edge];
+      const stepWidth = step ? getStepWidthIn(step) : 36;
+      const edgeLen = edgeLengths[edge];
 
+      if (step) {
         // Check if step width exceeds edge length
         if (stepWidth > edgeLen) {
           warnings.push(`⚠️ Steps (${inchesToFeetStr(stepWidth)} wide) exceed the ${edge} edge (${inchesToFeetStr(edgeLen)}). Consider placing steps on a longer edge.`);
         }
 
-        stepsEntry = {
-          category: 'Accessories',
-          name: step.name,
-          qtyNeeded: 1,
-          qtyOwned: step.qty || 0,
-          shortfall: Math.max(0, 1 - (step.qty || 0)),
-          note: `${edge} edge`,
-          hirehopId: step.hirehopId || null,
-        };
+        // Aggregate step quantities — multiple edges may use the same step item
+        if (stepEntries[step.name]) {
+          stepEntries[step.name].qtyNeeded += 1;
+          stepEntries[step.name].note += `, ${edge} edge`;
+        } else {
+          stepEntries[step.name] = {
+            category: 'Accessories',
+            name: step.name,
+            qtyNeeded: 1,
+            qtyOwned: step.qty || 0,
+            note: `${edge} edge`,
+            hirehopId: step.hirehopId || null,
+          };
+        }
       } else {
         warnings.push(`⚠️ No steps available for ${inchesToFeetStr(heightIn)} stage height.`);
       }
     }
   }
 
-  // Second pass: calculate handrails
+  // Second pass: calculate handrails — each edge independently
+  // If an edge also has steps, leave a gap in the handrail run for them
   for (const [edge, sel] of Object.entries(accessorySelections)) {
     if (sel.handrail) {
       const edgeLen = edgeLengths[edge];
 
-      // If steps are also on this edge, leave a gap for the step width
-      const stepGap = (stepEdge === edge) ? calculateStepGapIn(heightIn) : 0;
+      // If this same edge also has steps, leave a gap for the step width
+      const stepGap = sel.steps ? calculateStepGapIn(heightIn) : 0;
 
       const sections = calculateHandrailSections(edgeLen, stepGap);
 
@@ -2032,9 +2042,12 @@ function calculateAccessories(result) {
     }
   }
 
-  // Add steps entry
-  if (stepsEntry) {
-    parts.push(stepsEntry);
+  // Add step entries (one per step item name, aggregated across all edges)
+  for (const entry of Object.values(stepEntries)) {
+    parts.push({
+      ...entry,
+      shortfall: Math.max(0, entry.qtyNeeded - (entry.qtyOwned || 0)),
+    });
   }
 
   // Store warnings for display
@@ -2276,20 +2289,11 @@ function setStepPosition(edge, position) {
 /**
  * Toggle a specific accessory type on an edge.
  * Handrails and steps are independent — you can have both on the same edge.
- * Only one edge can have steps at a time.
+ * Multiple edges can have steps simultaneously.
  */
 function toggleEdge(edge, type) {
   // Toggle the selected type
   accessorySelections[edge][type] = !accessorySelections[edge][type];
-
-  // If we just turned ON steps, turn them OFF on all other edges (only one step set)
-  if (type === 'steps' && accessorySelections[edge].steps) {
-    for (const key of Object.keys(accessorySelections)) {
-      if (key !== edge) {
-        accessorySelections[key].steps = false;
-      }
-    }
-  }
 
   refreshAccessoriesAndPush();
 }

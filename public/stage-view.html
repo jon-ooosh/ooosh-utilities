@@ -359,8 +359,8 @@
       scene.background = new THREE.Color(0x0c0f14);
       scene.fog = new THREE.FogExp2(0x0c0f14, 0.008);
 
-      // ── Scale: 1 unit = 1 inch (we'll convert to a reasonable 3D scale) ──
-      const SCALE = 1 / 12; // 1 foot = 1 unit in Three.js space
+      // ── Scale: 1 unit = 1 inch → convert to Three.js units (1 foot = 1 unit) ──
+      const SCALE = 1 / 12;
       const stageLength = cfg.l * SCALE;
       const stageWidth = cfg.w * SCALE;
       const stageHeight = cfg.h * SCALE;
@@ -440,7 +440,7 @@
       const handrailMat = new THREE.MeshStandardMaterial({
         color: 0xbbbbbb, roughness: 0.25, metalness: 0.8,
       });
-      // Step material — dark with yellow safety edge
+      // Step material — dark with yellow safety nosing
       const stepMat = new THREE.MeshStandardMaterial({
         color: 0x333333, roughness: 0.7, metalness: 0.3,
       });
@@ -567,10 +567,6 @@
       const COMBINER_HEIGHT = 6 * SCALE;
       const usesCombiners = cfg.cm !== 'none';
 
-      // Stage total dimensions in 3D units (for perimeter detection)
-      const totalLengthScaled = cfg.l * SCALE;
-      const totalWidthScaled = cfg.w * SCALE;
-
       for (const [jx, jy, jtype] of cfg.j) {
         let x = jx * SCALE;
         let z = jy * SCALE;
@@ -578,8 +574,7 @@
         const topY = stageHeight - DECK_THICKNESS;
 
         // ── Nudge perimeter legs inward so they tuck under the deck ──
-        // Legs on the outer edge of the stage would otherwise protrude
-        const inset = LEG_RADIUS * 1.2;  // Slightly more than radius for clean tuck
+        const inset = LEG_RADIUS * 1.2;
         if (jx === 0) x += inset;
         else if (jx === cfg.l) x -= inset;
         if (jy === 0) z += inset;
@@ -634,7 +629,6 @@
 
       // ── Build handrails and steps from accessories config ──
       const acc = cfg.acc || {};
-      // NOTE: SCALE = 1/12, converting inches → 3D units. All measurements in inches.
       const HANDRAIL_HEIGHT = 42 * SCALE;   // 3.5ft (42") tall handrail
       const HANDRAIL_POST_R = 1.5 * SCALE;  // 1.5" radius posts
       const HANDRAIL_BAR_R = 0.75 * SCALE;  // 0.75" radius rails
@@ -657,20 +651,19 @@
         const edgeLen = def.axis === 'x' ? stageLength : stageWidth;
 
         // ── Calculate step gap position (if both handrail + steps on this edge) ──
-        const STEP_WIDTH_3D = 36 * SCALE;  // ~3ft (36") visual width
-        const GAP_WIDTH = 48 * SCALE;      // 4ft (48") gap in handrail (rounded from ~3ft step)
+        const STEP_WIDTH_3D = 36 * SCALE;  // ~3ft (36") visual step width
+        const GAP_WIDTH = 48 * SCALE;      // 4ft (48") gap in handrail for steps
         const hasGap = sel.handrail && sel.steps;
         let gapStart = 0, gapEnd = 0, gapCenter = edgeLen / 2;
 
         if (hasGap) {
-          // Determine step/gap position along the edge
           const stepPos = sel.stepPosition || 'middle';
           if (stepPos === 'front') {
-            gapCenter = GAP_WIDTH / 2 + 6 * SCALE;  // Offset ~6" from corner
+            gapCenter = GAP_WIDTH / 2 + 6 * SCALE;
           } else if (stepPos === 'back') {
             gapCenter = edgeLen - GAP_WIDTH / 2 - 6 * SCALE;
           } else {
-            gapCenter = edgeLen / 2;  // Middle (default)
+            gapCenter = edgeLen / 2;
           }
           gapStart = gapCenter - GAP_WIDTH / 2;
           gapEnd = gapCenter + GAP_WIDTH / 2;
@@ -678,20 +671,15 @@
 
         // ── Handrails ──
         if (sel.handrail) {
-          // Build handrail segments — either full edge or split around step gap
           const segments = [];
           if (hasGap && gapStart > 6 * SCALE && gapEnd < edgeLen - 6 * SCALE) {
-            // Two segments: before and after the gap
             if (gapStart > 12 * SCALE) segments.push({ from: 0, to: gapStart });
             if (edgeLen - gapEnd > 12 * SCALE) segments.push({ from: gapEnd, to: edgeLen });
           } else if (hasGap && gapStart <= 6 * SCALE) {
-            // Gap at start — single segment from gap end to edge end
             if (edgeLen - gapEnd > 12 * SCALE) segments.push({ from: gapEnd, to: edgeLen });
           } else if (hasGap && gapEnd >= edgeLen - 6 * SCALE) {
-            // Gap at end — single segment from start to gap start
             if (gapStart > 12 * SCALE) segments.push({ from: 0, to: gapStart });
           } else {
-            // No gap — full edge
             segments.push({ from: 0, to: edgeLen });
           }
 
@@ -712,7 +700,6 @@
                 pz = t;
               }
 
-              // Vertical post
               const postGeo = new THREE.CylinderGeometry(HANDRAIL_POST_R, HANDRAIL_POST_R, HANDRAIL_HEIGHT, 8);
               const postMesh = new THREE.Mesh(postGeo, handrailMat);
               postMesh.position.set(px, stageHeight + HANDRAIL_HEIGHT / 2, pz);
@@ -720,7 +707,7 @@
               scene.add(postMesh);
             }
 
-            // Top rail bar for this segment
+            // Top rail bar
             if (def.axis === 'x') {
               const barGeo = new THREE.CylinderGeometry(HANDRAIL_BAR_R, HANDRAIL_BAR_R, segLen, 8);
               const barMesh = new THREE.Mesh(barGeo, handrailMat);
@@ -756,11 +743,16 @@
 
         // ── Steps ──
         if (sel.steps) {
-          const STEP_DEPTH = 24 * SCALE;    // ~2ft (24") deep (how far out from stage)
-          const numSteps = Math.max(1, Math.round(stageHeight / (8 * SCALE)));  // ~8" per step rise
+          const STEP_TOTAL_DEPTH = 24 * SCALE;   // Total depth the staircase extends from stage edge
+          const numSteps = Math.max(1, Math.round(stageHeight / (8 * SCALE)));  // ~8" rise per step
           const stepRise = stageHeight / numSteps;
+          const stepDepth = STEP_TOTAL_DEPTH / numSteps;  // Depth of each individual step tread
 
-          // Position steps based on stepPosition (uses gap centre if also has handrails)
+          // Nosing thickness — a thin strip of yellow on the leading edge of each tread.
+          // For x-axis edges the nosing is thin in Z; for z-axis edges thin in X.
+          const NOSE_THICKNESS = 1.5 * SCALE;
+
+          // Centre of steps along this edge
           const stepCenterAlongEdge = hasGap ? gapCenter : (() => {
             const pos = sel.stepPosition || 'middle';
             if (pos === 'front') return STEP_WIDTH_3D / 2 + 6 * SCALE;
@@ -768,6 +760,7 @@
             return edgeLen / 2;
           })();
 
+          // Outward direction from stage edge
           let baseX, baseZ, dirX, dirZ;
           if (def.axis === 'x') {
             baseX = stepCenterAlongEdge;
@@ -781,39 +774,59 @@
             dirZ = 0;
           }
 
-          for (let i = 0; i < numSteps; i++) {
-            const stepY = (i + 0.5) * stepRise;
-            const outward = (numSteps - i) * (STEP_DEPTH / numSteps);
+          // Step geometry dimensions:
+          // For x-axis edges: tread is STEP_WIDTH_3D wide (X) × stepDepth deep (Z)
+          // For z-axis edges: tread is stepDepth wide (X) × STEP_WIDTH_3D deep (Z)
+          const stepW = def.axis === 'x' ? STEP_WIDTH_3D : stepDepth;
+          const stepD = def.axis === 'x' ? stepDepth : STEP_WIDTH_3D;
 
-            const stepW = def.axis === 'x' ? STEP_WIDTH_3D : STEP_DEPTH;
-            const stepD = def.axis === 'x' ? STEP_DEPTH : STEP_WIDTH_3D;
+          for (let i = 0; i < numSteps; i++) {
+            // i = 0 is the lowest (bottom) step, i = numSteps-1 is the top step nearest stage.
+            // 
+            // Centre of each step tread, measured outward from the stage edge:
+            //   Top step (i = numSteps-1) sits at 0.5 × stepDepth from the stage edge.
+            //   Bottom step (i = 0) sits at (numSteps - 0.5) × stepDepth from the stage edge.
+            //
+            // Formula: outwardDist = (numSteps - i - 0.5) * stepDepth
+            const outwardDist = (numSteps - i - 0.5) * stepDepth;
+
+            const stepY = (i + 0.5) * stepRise;  // Vertical centre of this tread
+
+            // Position of the tread centre in world space
+            const stepCX = baseX + dirX * outwardDist;
+            const stepCZ = baseZ + dirZ * outwardDist;
 
             const geo = new THREE.BoxGeometry(stepW, stepRise * 0.9, stepD);
             const mesh = new THREE.Mesh(geo, stepMat);
-            mesh.position.set(
-              baseX + dirX * (outward + STEP_DEPTH * 0.5),
-              stepY,
-              baseZ + dirZ * (outward + STEP_DEPTH * 0.5)
-            );
+            mesh.position.set(stepCX, stepY, stepCZ);
             mesh.castShadow = true;
             mesh.receiveShadow = true;
             scene.add(mesh);
 
-            // Yellow safety nosing on front edge of each step
-            const noseGeo = new THREE.BoxGeometry(stepW, stepRise * 0.15, 2 * SCALE);
+            // ── Yellow safety nosing on the leading (outward-facing) edge of each tread ──
+            // The nosing strip runs along the full width of the tread but is very thin in
+            // the outward direction. Its position is at the outermost face of the tread.
+            //
+            // Outermost face distance from stage edge: (numSteps - i) * stepDepth
+            const outerFaceDist = (numSteps - i) * stepDepth;
+            const noseCX = baseX + dirX * outerFaceDist;
+            const noseCZ = baseZ + dirZ * outerFaceDist;
+
+            // Nosing geometry is oriented based on edge axis so it lies flat along the tread edge.
+            // x-axis edges: nosing is wide in X (stepW), thin in Z (NOSE_THICKNESS)
+            // z-axis edges: nosing is thin in X (NOSE_THICKNESS), wide in Z (stepD)
+            const noseGeoW = def.axis === 'x' ? stepW : NOSE_THICKNESS;
+            const noseGeoD = def.axis === 'x' ? NOSE_THICKNESS : stepD;
+            const noseGeo = new THREE.BoxGeometry(noseGeoW, stepRise * 0.15, noseGeoD);
             const noseMesh = new THREE.Mesh(noseGeo, stepEdgeMat);
-            noseMesh.position.set(
-              baseX + dirX * (outward + STEP_DEPTH),
-              stepY + stepRise * 0.4,
-              baseZ + dirZ * (outward + STEP_DEPTH)
-            );
+            noseMesh.position.set(noseCX, stepY + stepRise * 0.4, noseCZ);
             noseMesh.castShadow = true;
             scene.add(noseMesh);
           }
         }
       }
 
-      // ── Orbit controls (manual implementation — r128 doesn't bundle OrbitControls) ──
+      // ── Orbit controls (manual — r128 doesn't bundle OrbitControls) ──
       let isDragging = false;
       let isShiftDrag = false;
       let prevMouse = { x: 0, y: 0 };
