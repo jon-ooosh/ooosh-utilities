@@ -406,14 +406,18 @@ function selectScrewjack(extensionNeededIn) {
  * Match required leg heights against available stock.
  * 
  * For exact matches, uses a standard leg directly.
- * For non-standard heights, attempts a screwjack combo:
- *   - Find the tallest standard leg where target > leg.heightIn + 2"
- *     (the 2" is the minimum body height: leg sits 2" off the ground on the screwjack)
- *   - extension_needed = target_finished_height - leg.heightIn - 2"
+ * 
+ * When useScrewjacks=true, for non-standard heights attempts a combo:
+ *   - Find tallest standard leg where target > leg.heightIn + SJ_BODY_HEIGHT
+ *   - extension_needed = target - leg.heightIn - SJ_BODY_HEIGHT
  *   - Pick the smallest screwjack whose 70% useable range covers that extension
- * If no combo works, flags as unavailable/impossible.
+ * 
+ * When useScrewjacks=false, non-standard heights are flagged as warnings only
+ * (no screwjack items added to the parts list — just a note for manual action).
+ * 
+ * If no combo works (or screwjacks disabled), flags as unavailable/impossible.
  */
-function matchLegs(legNeeds) {
+function matchLegs(legNeeds, useScrewjacks = true) {
   const SJ_BODY_HEIGHT = 2; // inches — leg sits this far above ground on the screwjack body
 
   const matched = [];           // Standard legs (exact match)
@@ -431,11 +435,8 @@ function matchLegs(legNeeds) {
         qtyNeeded: qty,
         shortfall: Math.max(0, qty - exactLeg.qty),
       });
-    } else {
+    } else if (useScrewjacks) {
       // No exact leg — try to build height with leg + screwjack
-      // We need: leg.heightIn + 2 (body) + extension = target
-      // So extension = target - leg.heightIn - 2
-      // The leg must be short enough that extension >= 0
       const candidateLegs = STOCK.legs
         .filter(l => l.heightIn <= targetHeightIn - SJ_BODY_HEIGHT)
         .sort((a, b) => b.heightIn - a.heightIn); // tallest first
@@ -445,7 +446,7 @@ function matchLegs(legNeeds) {
         const extensionIn = targetHeightIn - leg.heightIn - SJ_BODY_HEIGHT;
         const jack = selectScrewjack(extensionIn);
         if (jack) {
-          screwjackCombos.push({ leg, jack, qtyNeeded: qty, extensionIn });
+          screwjackCombos.push({ leg, jack, qtyNeeded: qty, extensionIn, targetHeightIn });
           comboFound = true;
           break;
         }
@@ -453,8 +454,11 @@ function matchLegs(legNeeds) {
 
       if (!comboFound) {
         // No combination of standard leg + available screwjack can reach this height
-        unavailable.push({ heightIn: targetHeightIn, qty });
+        unavailable.push({ heightIn: targetHeightIn, qty, reason: 'screwjack' });
       }
+    } else {
+      // Screwjacks disabled — flag as needing manual intervention
+      unavailable.push({ heightIn: targetHeightIn, qty, reason: 'disabled' });
     }
   }
 
@@ -606,15 +610,28 @@ function compilePartsList(layout, hardware, legMatch) {
     });
   }
 
-  // Impossible heights — flag clearly, nothing to push to HireHop
+  // Impossible/disabled heights — flag clearly, nothing to push to HireHop
   for (const u of legMatch.unavailable) {
+    // If this height is (someOtherHeight - COMBINER_HEIGHT_OFFSET), it's a combiner leg,
+    // not a standalone stage height. Show the context so it makes sense to the user.
+    const finishedEquivalent = u.heightIn + COMBINER_HEIGHT_OFFSET;
+    const isCombinerLeg = hardware.legNeeds[finishedEquivalent] !== undefined;
+
+    const displayName = isCombinerLeg
+      ? `${u.heightIn}" combiner leg (for ${finishedEquivalent}" finished stage)`
+      : `${u.heightIn}" leg`;
+
+    const noteText = u.reason === 'disabled'
+      ? '⚠️ Non-standard height — tick "Use screwjacks" to attempt this'
+      : '⚠️ No leg + screwjack combo can reach this height — sub-hire needed';
+
     parts.push({
       category: 'Legs',
-      name: `${u.heightIn}" stage height — NOT ACHIEVABLE`,
+      name: `${displayName} — needs screwjack`,
       qtyNeeded: u.qty,
       qtyOwned: 0,
       shortfall: u.qty,
-      note: '⚠️ Exceeds all screwjack ranges — sub-hire or custom solution needed',
+      note: noteText,
       hirehopId: null,
     });
   }
@@ -630,7 +647,7 @@ function compilePartsList(layout, hardware, legMatch) {
  * Run the full staging calculation for a single orientation.
  */
 function calculate(params) {
-  const { length, width, height, unit, combinerMode, inStockOnly } = params;
+  const { length, width, height, unit, combinerMode, inStockOnly, useScrewjacks = true } = params;
 
   const toInches = unit === 'm' ? metersToInches : feetToInches;
   const targetLengthIn = toInches(length);
@@ -669,7 +686,7 @@ function calculate(params) {
 
   const junctions = mapJunctions(layout);
   const hardware = assignHardware(junctions, effectiveHeight, combinerMode);
-  const legMatch = matchLegs(hardware.legNeeds);
+  const legMatch = matchLegs(hardware.legNeeds, useScrewjacks);
   const partsList = compilePartsList(layout, hardware, legMatch);
 
   const totalDecks = layout.length;
@@ -826,13 +843,13 @@ function calculate(params) {
  * "Better" = fewer shortfalls first, then fewer total parts.
  */
 function calculateBestOrientation(params) {
-  const { length, width, height, unit, combinerMode, inStockOnly } = params;
+  const { length, width, height, unit, combinerMode, inStockOnly, useScrewjacks } = params;
 
   // Orientation A: as entered
-  const resultA = calculate({ length, width, height, unit, combinerMode, inStockOnly });
+  const resultA = calculate({ length, width, height, unit, combinerMode, inStockOnly, useScrewjacks });
 
   // Orientation B: length and width swapped
-  const resultB = calculate({ length: width, width: length, height, unit, combinerMode, inStockOnly });
+  const resultB = calculate({ length: width, width: length, height, unit, combinerMode, inStockOnly, useScrewjacks });
 
   // If one fails and the other succeeds, use the successful one
   if (!resultA.success && !resultB.success) return resultA;
@@ -1337,6 +1354,7 @@ async function handleCalculate(e) {
   }
 
   const combinerMode = document.getElementById('combiner-mode').value;
+  const useScrewjacks = document.getElementById('use-screwjacks')?.checked ?? true;
 
   if (isNaN(length) || isNaN(width) || isNaN(height) || length <= 0 || width <= 0 || height <= 0) {
     showError('Please enter valid positive numbers for all dimensions.');
@@ -1353,7 +1371,7 @@ async function handleCalculate(e) {
 
   // Use orientation-optimised calculation
   stageRotated = false;  // Reset rotation on each new calculation
-  currentResult = calculateBestOrientation({ length, width, height, unit, combinerMode });
+  currentResult = calculateBestOrientation({ length, width, height, unit, combinerMode, useScrewjacks });
 
   if (currentResult.success) {
     const startDate = document.getElementById('avail-start').value;
@@ -1487,9 +1505,10 @@ async function recalculateStockOnly() {
   }
 
   const combinerMode = document.getElementById('combiner-mode').value;
+  const useScrewjacks = document.getElementById('use-screwjacks')?.checked ?? true;
 
   currentResult = calculateBestOrientation({
-    length, width, height, unit, combinerMode, inStockOnly: true,
+    length, width, height, unit, combinerMode, useScrewjacks, inStockOnly: true,
   });
 
   if (currentResult.success) {
@@ -1607,21 +1626,33 @@ function rotateStageLayout() {
     accessorySelections.right = old.front;
   }
 
-  // Update the deck layout SVG in-place (no need to re-run calculation)
+  if (!currentResult || !currentResult.success) return;
+  const r = currentResult.result;
+  const unit = currentResult.input.unit;
+
+  // ── 1. Update the 2D deck layout SVG ──
   const layoutContainer = document.querySelector('.layout-visual-container');
-  if (layoutContainer && currentResult && currentResult.success) {
-    const r = currentResult.result;
+  if (layoutContainer) {
     layoutContainer.innerHTML = renderLayoutVisual(
       currentResult.layout,
       r.actualLength.inches,
       r.actualWidth.inches,
-      currentResult.input.unit,
+      unit,
       stageRotated
     );
   }
 
-  // Re-render accessories and push button to reflect new edge labels/dimensions
-  refreshAccessoriesAndPush();
+  // ── 2. Update the accessories card (edge labels + parts list) ──
+  const accContainer = document.getElementById('accessories-container');
+  if (accContainer) {
+    accContainer.innerHTML = renderAccessoriesSection(currentResult);
+  }
+
+  // ── 3. Rebuild the action/push buttons so the 3D URL captures the new rotation ──
+  const actionContainer = document.getElementById('action-buttons-container');
+  if (actionContainer) actionContainer.innerHTML = renderActionButtons();
+  const pushContainer = document.getElementById('push-section-container');
+  if (pushContainer) pushContainer.innerHTML = renderPushButton();
 }
 
 /**
