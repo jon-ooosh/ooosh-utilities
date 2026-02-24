@@ -634,10 +634,11 @@
 
       // ── Build handrails and steps from accessories config ──
       const acc = cfg.acc || {};
-      const HANDRAIL_HEIGHT = 3.5 * SCALE;  // ~3.5ft tall handrail
-      const HANDRAIL_POST_R = 0.25 * SCALE;
-      const HANDRAIL_BAR_R = 0.15 * SCALE;
-      const POST_SPACING = 4 * SCALE;       // Post every ~4ft
+      // NOTE: SCALE = 1/12, converting inches → 3D units. All measurements in inches.
+      const HANDRAIL_HEIGHT = 42 * SCALE;   // 3.5ft (42") tall handrail
+      const HANDRAIL_POST_R = 1.5 * SCALE;  // 1.5" radius posts
+      const HANDRAIL_BAR_R = 0.75 * SCALE;  // 0.75" radius rails
+      const POST_SPACING = 48 * SCALE;      // Post every ~4ft (48")
 
       // Edge definitions: which direction each edge runs and where it sits
       // In 3D: X = length direction, Z = width direction
@@ -656,8 +657,8 @@
         const edgeLen = def.axis === 'x' ? stageLength : stageWidth;
 
         // ── Calculate step gap position (if both handrail + steps on this edge) ──
-        const STEP_WIDTH_3D = 3 * SCALE;  // ~3ft visual width
-        const GAP_WIDTH = 4 * SCALE;      // 4ft gap in handrail (rounded from ~3ft step)
+        const STEP_WIDTH_3D = 36 * SCALE;  // ~3ft (36") visual width
+        const GAP_WIDTH = 48 * SCALE;      // 4ft (48") gap in handrail (rounded from ~3ft step)
         const hasGap = sel.handrail && sel.steps;
         let gapStart = 0, gapEnd = 0, gapCenter = edgeLen / 2;
 
@@ -665,9 +666,9 @@
           // Determine step/gap position along the edge
           const stepPos = sel.stepPosition || 'middle';
           if (stepPos === 'front') {
-            gapCenter = GAP_WIDTH / 2 + 0.5 * SCALE;  // Offset slightly from corner
+            gapCenter = GAP_WIDTH / 2 + 6 * SCALE;  // Offset ~6" from corner
           } else if (stepPos === 'back') {
-            gapCenter = edgeLen - GAP_WIDTH / 2 - 0.5 * SCALE;
+            gapCenter = edgeLen - GAP_WIDTH / 2 - 6 * SCALE;
           } else {
             gapCenter = edgeLen / 2;  // Middle (default)
           }
@@ -679,16 +680,16 @@
         if (sel.handrail) {
           // Build handrail segments — either full edge or split around step gap
           const segments = [];
-          if (hasGap && gapStart > 0.5 * SCALE && gapEnd < edgeLen - 0.5 * SCALE) {
+          if (hasGap && gapStart > 6 * SCALE && gapEnd < edgeLen - 6 * SCALE) {
             // Two segments: before and after the gap
-            if (gapStart > 1 * SCALE) segments.push({ from: 0, to: gapStart });
-            if (edgeLen - gapEnd > 1 * SCALE) segments.push({ from: gapEnd, to: edgeLen });
-          } else if (hasGap && gapStart <= 0.5 * SCALE) {
+            if (gapStart > 12 * SCALE) segments.push({ from: 0, to: gapStart });
+            if (edgeLen - gapEnd > 12 * SCALE) segments.push({ from: gapEnd, to: edgeLen });
+          } else if (hasGap && gapStart <= 6 * SCALE) {
             // Gap at start — single segment from gap end to edge end
-            if (edgeLen - gapEnd > 1 * SCALE) segments.push({ from: gapEnd, to: edgeLen });
-          } else if (hasGap && gapEnd >= edgeLen - 0.5 * SCALE) {
+            if (edgeLen - gapEnd > 12 * SCALE) segments.push({ from: gapEnd, to: edgeLen });
+          } else if (hasGap && gapEnd >= edgeLen - 6 * SCALE) {
             // Gap at end — single segment from start to gap start
-            if (gapStart > 1 * SCALE) segments.push({ from: 0, to: gapStart });
+            if (gapStart > 12 * SCALE) segments.push({ from: 0, to: gapStart });
           } else {
             // No gap — full edge
             segments.push({ from: 0, to: edgeLen });
@@ -755,15 +756,15 @@
 
         // ── Steps ──
         if (sel.steps) {
-          const STEP_DEPTH = 2 * SCALE;    // ~2ft deep (how far out from stage)
-          const numSteps = Math.max(1, Math.round(stageHeight / (0.8 * SCALE)));
+          const STEP_DEPTH = 24 * SCALE;    // ~2ft (24") deep (how far out from stage)
+          const numSteps = Math.max(1, Math.round(stageHeight / (8 * SCALE)));  // ~8" per step rise
           const stepRise = stageHeight / numSteps;
 
           // Position steps based on stepPosition (uses gap centre if also has handrails)
           const stepCenterAlongEdge = hasGap ? gapCenter : (() => {
             const pos = sel.stepPosition || 'middle';
-            if (pos === 'front') return STEP_WIDTH_3D / 2 + 0.5 * SCALE;
-            if (pos === 'back') return edgeLen - STEP_WIDTH_3D / 2 - 0.5 * SCALE;
+            if (pos === 'front') return STEP_WIDTH_3D / 2 + 6 * SCALE;
+            if (pos === 'back') return edgeLen - STEP_WIDTH_3D / 2 - 6 * SCALE;
             return edgeLen / 2;
           })();
 
@@ -799,7 +800,7 @@
             scene.add(mesh);
 
             // Yellow safety nosing on front edge of each step
-            const noseGeo = new THREE.BoxGeometry(stepW, stepRise * 0.15, 0.15 * SCALE);
+            const noseGeo = new THREE.BoxGeometry(stepW, stepRise * 0.15, 2 * SCALE);
             const noseMesh = new THREE.Mesh(noseGeo, stepEdgeMat);
             noseMesh.position.set(
               baseX + dirX * (outward + STEP_DEPTH),

@@ -1024,9 +1024,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Set default values (metric)
   currentUnit = 'm';
-  document.getElementById('stage-length-m').value = '6';
-  document.getElementById('stage-width-m').value = '4';
-  document.getElementById('stage-height-m').value = '0.6';
+  document.getElementById('stage-length-m').value = '';
+  document.getElementById('stage-width-m').value = '';
+  document.getElementById('stage-height-m').value = '';
   syncFieldVisibility();
 
   // Auto-pull job dates if job ID is in URL (from Staff Hub)
@@ -1554,17 +1554,6 @@ function renderResults(result) {
     </div>`;
   }
 
-  // 3D View share button
-  html += `<div class="alt-section" style="text-align:center; padding-top:16px">
-    <button class="btn btn-calculate" style="padding:10px 24px; font-size:14px; background:linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%)"
-      onclick="open3DView()">
-      🎨 Open 3D Client View
-    </button>
-    <button class="chip" style="margin-left:8px" onclick="copy3DLink()">
-      📋 Copy share link
-    </button>
-  </div>`;
-
   html += `</div>`;
 
   // Parts list (BEFORE junction points)
@@ -1696,6 +1685,9 @@ function renderResults(result) {
       <ul>${result.summary.warnings.map(w => `<li>${w}</li>`).join('')}</ul>
     </div>`;
   }
+
+  // Action buttons: 3D view, share link, push to HireHop — all grouped at the bottom
+  html += `<div id="action-buttons-container">${renderActionButtons()}</div>`;
 
   // Push to HireHop — persistent container with ID so it survives accessory re-renders
   html += `<div id="push-section-container">${renderPushButton()}</div>`;
@@ -2261,11 +2253,14 @@ function clearEdge(edge) {
 
 /**
  * Re-render the accessories card and push button after an accessory change.
- * Handles edge case where renderAccessoriesSection returns empty HTML gracefully.
+ * Uses independent try-catch blocks so a failure in accessories rendering
+ * won't prevent the push button from updating.
  */
 function refreshAccessoriesAndPush() {
-  if (currentResult && currentResult.success) {
-    // Re-render accessories card
+  if (!currentResult || !currentResult.success) return;
+
+  // Re-render accessories card (isolated — errors won't block push button)
+  try {
     const container = document.querySelector('.accessories-card');
     if (container) {
       const newHtml = renderAccessoriesSection(currentResult);
@@ -2277,12 +2272,22 @@ function refreshAccessoriesAndPush() {
         }
       }
     }
+  } catch (accErr) {
+    console.warn('Accessories re-render failed (non-fatal):', accErr);
+  }
 
-    // Re-render push button (accessories affect what gets pushed)
+  // Re-render push button + action buttons (always runs even if accessories failed)
+  try {
     const pushContainer = document.getElementById('push-section-container');
     if (pushContainer) {
       pushContainer.innerHTML = renderPushButton();
     }
+    const actionContainer = document.getElementById('action-buttons-container');
+    if (actionContainer) {
+      actionContainer.innerHTML = renderActionButtons();
+    }
+  } catch (pushErr) {
+    console.warn('Push button re-render failed:', pushErr);
   }
 }
 
@@ -2347,6 +2352,14 @@ async function pushToJob() {
   // Build the 3D viewer share link to include in the job note
   const shareLink = build3DViewUrl();
 
+  // Build a human-readable stage summary for the job note
+  const r = currentResult.result;
+  const unit = currentResult.input.unit;
+  const lenLabel = formatDimensionForUnit(r.actualLength.inches, 'ft');
+  const widLabel = formatDimensionForUnit(r.actualWidth.inches, 'ft');
+  const hLabel = formatDimensionForUnit(r.actualHeight.inches, 'ft');
+  const stageSummary = `To form a stage ${lenLabel} × ${widLabel} @ ${hLabel} high`;
+
   try {
     const response = await fetch('/.netlify/functions/staging-push', {
       method: 'POST',
@@ -2355,6 +2368,7 @@ async function pushToJob() {
         jobId: jobId,
         items: items.map(i => ({ hirehopId: i.hirehopId, qty: i.qty })),
         shareLink: shareLink || undefined,
+        stageSummary: stageSummary,
       }),
     });
 
@@ -2385,6 +2399,27 @@ async function pushToJob() {
     }
     alert(`Failed to add to job: ${err.message}`);
   }
+}
+
+/**
+ * Render the "action buttons" card — 3D view and share link.
+ * Displayed at the bottom of results alongside push button.
+ */
+function renderActionButtons() {
+  if (!currentResult || !currentResult.success) return '';
+
+  return `<div class="result-card" style="text-align:center">
+    <h2>📤 Share & Export</h2>
+    <div style="display:flex; gap:12px; justify-content:center; flex-wrap:wrap; margin-top:12px">
+      <button class="btn btn-calculate" style="padding:10px 24px; font-size:14px; background:linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%)"
+        onclick="open3DView()">
+        🎨 Open 3D Client View
+      </button>
+      <button class="chip" style="padding:10px 18px; font-size:14px" onclick="copy3DLink()">
+        📋 Copy share link
+      </button>
+    </div>
+  </div>`;
 }
 
 /**

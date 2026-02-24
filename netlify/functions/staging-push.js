@@ -62,7 +62,7 @@ exports.handler = async (event) => {
 
   try {
     const body = JSON.parse(event.body);
-    const { jobId, items, shareLink } = body;
+    const { jobId, items, shareLink, stageSummary } = body;
 
     // Validate inputs
     if (!jobId || !/^\d+$/.test(String(jobId))) {
@@ -170,13 +170,11 @@ exports.handler = async (event) => {
 
     // ── Add a job note with the 3D viewer link (if provided) ──
     let noteAdded = false;
-    if (shareLink) {
-      try {
-        noteAdded = await addJobNote(domain, token, jobId, totalQty, Object.keys(itemsMap).length, shareLink);
-      } catch (noteErr) {
-        // Note failure is non-fatal — items were already pushed successfully
-        console.warn('Failed to add job note (non-fatal):', noteErr.message);
-      }
+    try {
+      noteAdded = await addJobNote(domain, token, jobId, totalQty, Object.keys(itemsMap).length, shareLink, stageSummary);
+    } catch (noteErr) {
+      // Note failure is non-fatal — items were already pushed successfully
+      console.warn('Failed to add job note (non-fatal):', noteErr.message);
     }
 
     return {
@@ -216,20 +214,23 @@ exports.handler = async (event) => {
  * @param {string} jobId - Job number
  * @param {number} totalQty - Total items pushed
  * @param {number} itemTypes - Number of distinct item types
- * @param {string} shareLink - 3D viewer URL
+ * @param {string} shareLink - 3D viewer URL (optional)
+ * @param {string} stageSummary - Human-readable stage description (optional)
  * @returns {boolean} true if note was added successfully
  */
-async function addJobNote(domain, token, jobId, totalQty, itemTypes, shareLink) {
+async function addJobNote(domain, token, jobId, totalQty, itemTypes, shareLink, stageSummary) {
   const timestamp = new Date().toLocaleDateString('en-GB') + ' ' +
                     new Date().toLocaleTimeString('en-GB');
 
-  const noteText = `🏗️ Staging Calculator — items added automatically
-${itemTypes} item types, ${totalQty} total pieces added.
-
-3D Stage Preview:
-${shareLink}
-
-Added: ${timestamp}`;
+  let noteText = `🏗️ Staging Calculator — items added automatically`;
+  if (stageSummary) {
+    noteText += `\n${stageSummary}`;
+  }
+  noteText += `\n${itemTypes} item types, ${totalQty} total pieces added.`;
+  if (shareLink) {
+    noteText += `\n\n3D Stage Preview:\n${shareLink}`;
+  }
+  noteText += `\n\nAdded: ${timestamp}`;
 
   const url = `https://${domain}/php_functions/notes_save.php`;
 
