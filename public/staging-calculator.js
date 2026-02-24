@@ -404,25 +404,32 @@ function selectScrewjack(extensionNeededIn) {
 
 /**
  * Match required leg heights against available stock.
- * 
+ *
  * For exact matches, uses a standard leg directly.
- * 
- * When useScrewjacks=true, for non-standard heights attempts a combo:
- *   - Find tallest standard leg where target > leg.heightIn + SJ_BODY_HEIGHT
- *   - extension_needed = target - leg.heightIn - SJ_BODY_HEIGHT
- *   - Pick the smallest screwjack whose 70% useable range covers that extension
- * 
- * When useScrewjacks=false, non-standard heights are flagged as warnings only
- * (no screwjack items added to the parts list — just a note for manual action).
- * 
- * If no combo works (or screwjacks disabled), flags as unavailable/impossible.
+ *
+ * When useScrewjacks=true, uses a RANGE-BASED approach:
+ *   For each available (leg, screwjack) combo, the achievable height range is:
+ *     min = leg.heightIn + SJ_BODY_HEIGHT            (screwjack at zero extension)
+ *     max = leg.heightIn + SJ_BODY_HEIGHT + jack.physicalHeight * 0.70
+ *   We pick the tallest leg whose range covers the target (minimises extension needed).
+ *
+ * When useScrewjacks=false, non-standard heights are flagged as needing manual action.
  */
 function matchLegs(legNeeds, useScrewjacks = true) {
   const SJ_BODY_HEIGHT = 2; // inches — leg sits this far above ground on the screwjack body
 
   const matched = [];           // Standard legs (exact match)
   const screwjackCombos = [];   // { leg, jack, qtyNeeded, extensionIn } — leg + screwjack pairs
-  const unavailable = [];       // Heights that cannot be achieved at all
+  const unavailable = [];       // Heights that cannot be achieved with available stock
+
+  // Debug: log what legs we're working with so misconfigured stock is immediately visible
+  console.log('matchLegs — available leg heights (heightIn):',
+    STOCK.legs.map(l => `${l.heightIn}" (${l.name})`).join(', '));
+  console.log('matchLegs — available screwjacks:',
+    STOCK.screwjacks.map(sj => {
+      const h = getScrewjackHeightIn(sj);
+      return `${sj.name}: physical=${h}", max extension=${h ? (h * 0.70).toFixed(1) : '?'}"`;
+    }).join('; ') || 'none');
 
   for (const [heightStr, qty] of Object.entries(legNeeds)) {
     const targetHeightIn = parseFloat(heightStr);
@@ -435,30 +442,55 @@ function matchLegs(legNeeds, useScrewjacks = true) {
         qtyNeeded: qty,
         shortfall: Math.max(0, qty - exactLeg.qty),
       });
-    } else if (useScrewjacks) {
-      // No exact leg — try to build height with leg + screwjack
-      const candidateLegs = STOCK.legs
-        .filter(l => l.heightIn <= targetHeightIn - SJ_BODY_HEIGHT)
-        .sort((a, b) => b.heightIn - a.heightIn); // tallest first
+      continue;
+    }
 
-      let comboFound = false;
-      for (const leg of candidateLegs) {
-        const extensionIn = targetHeightIn - leg.heightIn - SJ_BODY_HEIGHT;
-        const jack = selectScrewjack(extensionIn);
-        if (jack) {
-          screwjackCombos.push({ leg, jack, qtyNeeded: qty, extensionIn, targetHeightIn });
-          comboFound = true;
-          break;
+    if (!useScrewjacks) {
+      unavailable.push({ heightIn: targetHeightIn, qty, reason: 'disabled' });
+      continue;
+    }
+
+    // ── Range-based screwjack matching ──
+    // For each (leg, jack) pair, check if [leg + 2", leg + 2" + jack.max] covers the target.
+    // We sort legs tallest-first so we prefer the combination requiring least extension.
+    const legsSorted = [...STOCK.legs].sort((a, b) => b.heightIn - a.heightIn);
+    const jacksSorted = [...STOCK.screwjacks].sort((a, b) => {
+      return (getScrewjackHeightIn(a) || 0) - (getScrewjackHeightIn(b) || 0);
+    });
+
+    let bestCombo = null;
+
+    outerLoop:
+    for (const leg of legsSorted) {
+      const minAchievable = leg.heightIn + SJ_BODY_HEIGHT;
+      if (minAchievable > targetHeightIn) continue; // leg too tall even at min winding
+
+      for (const jack of jacksSorted) {
+        const physH = getScrewjackHeightIn(jack);
+        if (!physH) continue;
+        const maxExtension = physH * 0.70;
+        const maxAchievable = leg.heightIn + SJ_BODY_HEIGHT + maxExtension;
+
+        if (targetHeightIn >= minAchievable && targetHeightIn <= maxAchievable) {
+          const extensionIn = targetHeightIn - leg.heightIn - SJ_BODY_HEIGHT;
+          bestCombo = { leg, jack, qtyNeeded: qty, extensionIn, targetHeightIn };
+          break outerLoop; // tallest leg already (sorted desc), smallest jack that fits
         }
       }
+    }
 
-      if (!comboFound) {
-        // No combination of standard leg + available screwjack can reach this height
-        unavailable.push({ heightIn: targetHeightIn, qty, reason: 'screwjack' });
-      }
+    if (bestCombo) {
+      screwjackCombos.push(bestCombo);
+      console.log(`matchLegs — screwjack combo for ${targetHeightIn}":`,
+        `${bestCombo.leg.name} + ${bestCombo.jack.name}`,
+        `(extension: ${bestCombo.extensionIn.toFixed(1)}")`);
     } else {
-      // Screwjacks disabled — flag as needing manual intervention
-      unavailable.push({ heightIn: targetHeightIn, qty, reason: 'disabled' });
+      console.warn(`matchLegs — NO combo found for ${targetHeightIn}". Legs tried:`,
+        legsSorted.map(l => {
+          const maxH = l.heightIn + SJ_BODY_HEIGHT + Math.max(...jacksSorted.map(j => (getScrewjackHeightIn(j) || 0) * 0.70), 0);
+          return `${l.heightIn}" → range [${l.heightIn + SJ_BODY_HEIGHT}", ${maxH.toFixed(1)}"]`;
+        }).join(', '));
+      unavailable.push({ heightIn: targetHeightIn, qty, reason: 'screwjack' });
     }
   }
 
@@ -682,7 +714,13 @@ function calculate(params) {
   const nearestLegHeight = LEG_HEIGHTS.reduce((best, h) =>
     Math.abs(h - targetHeightIn) < Math.abs(best - targetHeightIn) ? h : best
   , LEG_HEIGHTS[0]);
-  const effectiveHeight = standardHeightMatch ? targetHeightIn : nearestLegHeight;
+
+  // When screwjacks are enabled, pass the actual requested height through — matchLegs will
+  // find the right leg+screwjack combo. Only snap to nearest standard leg when screwjacks
+  // are OFF (legacy behaviour) or when the target already exactly matches a standard leg.
+  const effectiveHeight = (standardHeightMatch || !useScrewjacks)
+    ? (standardHeightMatch ? targetHeightIn : nearestLegHeight)
+    : targetHeightIn;
 
   const junctions = mapJunctions(layout);
   const hardware = assignHardware(junctions, effectiveHeight, combinerMode);
@@ -911,8 +949,20 @@ async function fetchStock() {
       combiners: `${STOCK.combiners.twoInOne.qty} × 2-in-1, ${STOCK.combiners.fourInOne.qty} × 4-in-1`,
       handrails: STOCK.handrails.length,
       steps: STOCK.steps.length,
+      screwjacks: STOCK.screwjacks.length,
       timestamp: data.timestamp,
     });
+
+    // Log all legs with their heightIn values — critical for diagnosing screwjack combos
+    console.log('Legs in stock:',
+      STOCK.legs.map(l => `${l.heightIn}" — ${l.name} (qty: ${l.qty})`).join('\n  '));
+
+    // Log screwjacks
+    if (STOCK.screwjacks.length > 0) {
+      console.log('Screwjacks:', STOCK.screwjacks.map(sj => `${sj.name} (qty: ${sj.qty})`).join(', '));
+    } else {
+      console.warn('⚠️ No screwjacks found in stock — check HireHop category 447');
+    }
 
     // Log handrail and step details for debugging
     if (STOCK.handrails.length > 0) {

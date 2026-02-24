@@ -2,10 +2,11 @@
  * Netlify Function: staging-stock
  * 
  * Fetches staging equipment stock from HireHop's export endpoint.
- * Queries categories 445 (Decks/Platforms), 446 (Legs & Hardware),
- * and 448 (Staging Accessories — handrails, steps), parses item names
- * to extract dimensions, and returns a structured STOCK object
- * matching the staging calculator's format.
+ * Queries categories:
+ *   445 — Decks/Platforms
+ *   446 — Legs & Hardware (legs, combiners, wheels)
+ *   447 — Screwjacks  ← ADDED (was missing, causing screwjacks to never appear)
+ *   448 — Staging Accessories (handrails, steps)
  * 
  * Includes a 10-minute in-memory cache to avoid hitting HireHop's
  * rate limit (60 req/min). The cache persists as long as the Netlify
@@ -23,6 +24,7 @@ const HIREHOP_EXPORT_URL = 'https://myhirehop.com/modules/stock/export_data.php'
 // Staging category IDs in HireHop
 const CATEGORY_DECKS = 445;
 const CATEGORY_HARDWARE = 446;
+const CATEGORY_SCREWJACKS = 447;   // ← was not being fetched before
 const CATEGORY_ACCESSORIES = 448;
 
 // Combiner height offset (universal constant — physical property, won't change)
@@ -42,12 +44,6 @@ const WHEEL_FINISHED_HEIGHTS = {
   '4"': 12,   // 4" wheel with deck pickup = 1ft finished
   '6"': 6,
   '8"': 8,
-};
-
-// Screwjack min/max usable range (physical property of the mechanism)
-const SCREWJACK_RANGES = {
-  8:    { minIn: 2, maxIn: 5.5 },
-  19.5: { minIn: 2, maxIn: 13.5 },
 };
 
 // CORS headers
@@ -104,10 +100,11 @@ exports.handler = async (event) => {
   }
 
   try {
-    // Fetch all three categories in parallel
-    const [decksRaw, hardwareRaw, accessoriesRaw] = await Promise.all([
+    // Fetch all four categories in parallel — category 447 (screwjacks) now included
+    const [decksRaw, hardwareRaw, screwjacksRaw, accessoriesRaw] = await Promise.all([
       fetchCategory(exportId, exportKey, CATEGORY_DECKS),
       fetchCategory(exportId, exportKey, CATEGORY_HARDWARE),
+      fetchCategory(exportId, exportKey, CATEGORY_SCREWJACKS),
       fetchCategory(exportId, exportKey, CATEGORY_ACCESSORIES),
     ]);
 
@@ -119,7 +116,7 @@ exports.handler = async (event) => {
       decks: parseDecks(decksRaw),
       legs: parseLegs(hardwareRaw),
       combiners: parseCombiners(hardwareRaw),
-      screwjacks: parseScrewjacks(hardwareRaw),
+      screwjacks: parseScrewjacks(screwjacksRaw),   // ← now uses dedicated category 447 data
       wheels: parseWheels(hardwareRaw),
       handrails: parseHandrails(allHardwareAndAccessories),
       steps: parseSteps(allHardwareAndAccessories),
@@ -132,6 +129,7 @@ exports.handler = async (event) => {
       rawCounts: {
         decks: decksRaw.length,
         hardware: hardwareRaw.length,
+        screwjacks: screwjacksRaw.length,
         accessories: accessoriesRaw.length,
       },
       timestamp: new Date().toISOString(),
@@ -141,7 +139,7 @@ exports.handler = async (event) => {
     // ── Write to cache ──
     cachedResponse = responseBody;
     cachedAt = Date.now();
-    console.log('Stock fetched from HireHop and cached');
+    console.log('Stock fetched from HireHop and cached. Screwjacks:', stock.screwjacks.length);
 
     return {
       statusCode: 200,
@@ -258,7 +256,7 @@ function parseLegs(rawItems) {
     const name = item.NAME || item.name || '';
     const qty = parseInt(item.QTY || item.qty || 0);
 
-    // Must contain "staging leg" or "leg" but NOT "combiner", "screwjack", "wheel", etc.
+    // Must contain "leg" but NOT combiner, screwjack, wheel, handrail, step
     if (!name.match(/\bleg\b/i) || name.match(/combiner|screwjack|wheel|handrail|step/i)) continue;
 
     // Extract height in inches — try the leading inches first: '24" / 2ft staging leg'
@@ -306,7 +304,14 @@ function parseCombiners(rawItems) {
 }
 
 /**
- * Parse screwjacks. Names like '8" / 20cm screwjack' or '19.5" / 50cm screwjack'
+ * Parse screwjacks from dedicated category 447.
+ * Names like 'Screwjack - 8" / 20cm (48mm)' or 'Screwjack - 19.5" / 50cm (48mm)'
+ * 
+ * The heightIn stored is the TOTAL PHYSICAL length of the screwjack.
+ * Useable extension range is approximately:
+ *   min: 0" (wound all the way down, but in practice ~0")
+ *   max: 70% of physical height
+ * The staging-calculator.js matchLegs() function handles the range maths.
  */
 function parseScrewjacks(rawItems) {
   const screwjacks = [];
@@ -315,21 +320,32 @@ function parseScrewjacks(rawItems) {
     const name = item.NAME || item.name || '';
     const qty = parseInt(item.QTY || item.qty || 0);
 
-    if (!name.match(/screwjack/i)) continue;
+    // Items in this category should all be screwjacks, but be defensive
+    if (qty <= 0) continue;
 
+    // Extract total physical height in inches from name
+    // Handles: "19.5"", "8"", with optional space before quote
     const inchMatch = name.match(/(\d+\.?\d*)\s*["″]/);
     if (inchMatch) {
-      const totalLengthIn = parseFloat(inchMatch[1]);
-      const range = SCREWJACK_RANGES[totalLengthIn] || { minIn: 2, maxIn: totalLengthIn * 0.7 };
-
+      const heightIn = parseFloat(inchMatch[1]);
       screwjacks.push({
         name,
-        totalLengthIn,
-        minIn: range.minIn,
-        maxIn: range.maxIn,
+        heightIn,     // total physical length — matchLegs uses heightIn * 0.70 as max extension
         qty,
         hirehopId: item.ID || null,
       });
+    } else {
+      // Fallback: try to parse from cm value in name ("50cm" → ~19.7")
+      const cmMatch = name.match(/(\d+)\s*cm/i);
+      if (cmMatch) {
+        const heightIn = parseInt(cmMatch[1]) / 2.54;
+        screwjacks.push({
+          name,
+          heightIn,
+          qty,
+          hirehopId: item.ID || null,
+        });
+      }
     }
   }
 
