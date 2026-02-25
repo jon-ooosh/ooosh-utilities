@@ -19,12 +19,10 @@
  * Returns: { success, stock, raw, timestamp, cached }
  */
 
-const { getStore } = require('@netlify/blobs');
-
 const HIREHOP_EXPORT_URL = 'https://myhirehop.com/modules/stock/export_data.php';
-
-// Blob cache key — all containers share this single entry
-const BLOB_CACHE_KEY = 'stock-cache';
+// Caching is handled at the CDN level via Cache-Control headers — see handler below.
+// This means Netlify's CDN serves the response for 10 minutes without invoking the
+// function at all, so HireHop is only hit once per 10 minutes across all users.
 
 // Staging category IDs in HireHop
 const CATEGORY_DECKS = 445;
@@ -60,12 +58,6 @@ const headers = {
 
 
 // ============================================================================
-// IN-MEMORY CACHE — survives between invocations while container is warm
-// ============================================================================
-
-const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
-
-// ============================================================================
 // MAIN HANDLER
 // ============================================================================
 
@@ -75,27 +67,8 @@ exports.handler = async (event) => {
     return { statusCode: 204, headers, body: '' };
   }
 
-  // ── Check shared Blob cache first ──
-  // This cache is shared across ALL Netlify container instances, unlike in-memory
-  // which only works within a single container. This prevents multiple containers
-  // from simultaneously hammering the HireHop API on cold starts.
+  // No in-function cache needed — CDN caching handles this (see response headers below).
   const now = Date.now();
-  try {
-    const store = getStore('staging-stock');
-    const cached = await store.get(BLOB_CACHE_KEY, { type: 'json' });
-    if (cached && cached.cachedAt && (now - cached.cachedAt) < CACHE_TTL_MS) {
-      const ageSeconds = Math.round((now - cached.cachedAt) / 1000);
-      console.log(`Returning shared blob cache (age: ${ageSeconds}s)`);
-      return {
-        statusCode: 200,
-        headers,
-        body: JSON.stringify({ ...cached.data, cached: true }),
-      };
-    }
-  } catch (blobErr) {
-    // Blob read failure is non-fatal — just fetch fresh from HireHop
-    console.warn('Blob cache read failed (non-fatal):', blobErr.message);
-  }
 
   const exportId = process.env.HIREHOP_EXPORT_ID;
   const exportKey = process.env.HIREHOP_EXPORT_KEY;
@@ -147,43 +120,27 @@ exports.handler = async (event) => {
       cached: false,
     });
 
-   // ── Write to shared Blob cache ──
-    // All future container instances will read from here instead of hitting HireHop
-    try {
-      const store = getStore('staging-stock');
-      await store.setJSON(BLOB_CACHE_KEY, {
-        cachedAt: Date.now(),
-        data: JSON.parse(responseBody),
-      });
-      console.log('Stock fetched from HireHop and written to shared blob cache. Skirts:', stock.skirts.length);
-    } catch (blobErr) {
-      // Blob write failure is non-fatal — response still goes to the user
-      console.warn('Blob cache write failed (non-fatal):', blobErr.message);
-    } 
+   console.log('Stock fetched from HireHop successfully. Skirts:', stock.skirts.length);
 
     return {
       statusCode: 200,
-      headers,
+      headers: {
+        ...headers,
+        // Tell Netlify's CDN to cache this response for 10 minutes.
+        // During that window, ALL users get the cached response — the function
+        // (and HireHop) are not called at all. After 10 mins, one request
+        // triggers a fresh fetch while stale data is served in the background.
+        'Cache-Control': 'public, s-maxage=600, stale-while-revalidate=60',
+        'Netlify-CDN-Cache-Control': 'public, max-age=600, stale-while-revalidate=3600',
+      },
       body: responseBody,
     };
+
   } catch (err) {
     console.error('Staging stock fetch error:', err);
 
-    // ── If fetch fails, try serving stale blob cache rather than a hard error ──
-    try {
-      const store = getStore('staging-stock');
-      const stale = await store.get(BLOB_CACHE_KEY, { type: 'json' });
-      if (stale && stale.data) {
-        console.log('HireHop fetch failed — returning stale blob cache as fallback');
-        return {
-          statusCode: 200,
-          headers,
-          body: JSON.stringify({ ...stale.data, cached: true, stale: true }),
-        };
-      }
-    } catch (blobErr) {
-      console.warn('Stale blob fallback also failed:', blobErr.message);
-    }
+    // No stale fallback available — CDN may serve its own stale copy via
+    // stale-while-revalidate if this error occurs during a background revalidation.
 
     return {
       statusCode: 500,
