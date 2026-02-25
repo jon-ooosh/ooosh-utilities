@@ -100,13 +100,12 @@ exports.handler = async (event) => {
   }
 
   try {
-    // Fetch all four categories in parallel
-    const [decksRaw, hardwareRaw, screwjacksRaw, accessoriesRaw] = await Promise.all([
-      fetchCategory(exportId, exportKey, CATEGORY_DECKS),
-      fetchCategory(exportId, exportKey, CATEGORY_HARDWARE),
-      fetchCategory(exportId, exportKey, CATEGORY_SCREWJACKS),
-      fetchCategory(exportId, exportKey, CATEGORY_ACCESSORIES),
-    ]);
+    // Fetch categories sequentially to avoid bursting HireHop's rate limit
+    // (limit is 3 req/second — parallel fetches reliably trigger 429s)
+    const decksRaw       = await fetchCategory(exportId, exportKey, CATEGORY_DECKS);
+    const hardwareRaw    = await fetchCategory(exportId, exportKey, CATEGORY_HARDWARE);
+    const screwjacksRaw  = await fetchCategory(exportId, exportKey, CATEGORY_SCREWJACKS);
+    const accessoriesRaw = await fetchCategory(exportId, exportKey, CATEGORY_ACCESSORIES);
 
     // Parse into structured STOCK format
     // Handrails and steps can live in either hardware (446) or accessories (448)
@@ -190,23 +189,38 @@ async function fetchCategory(exportId, exportKey, categoryId) {
   });
 
   const url = `${HIREHOP_EXPORT_URL}?${params.toString()}`;
-  const response = await fetch(url);
 
-  if (!response.ok) {
-    throw new Error(`HireHop API returned ${response.status} for category ${categoryId}`);
+  // Retry up to 3 times on 429 (rate limit), with a 1.5s pause between attempts
+  const MAX_RETRIES = 3;
+  const RETRY_DELAY_MS = 1500;
+
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    const response = await fetch(url);
+
+    if (response.status === 429) {
+      if (attempt < MAX_RETRIES) {
+        console.warn(`HireHop rate limit hit for category ${categoryId} (attempt ${attempt}/${MAX_RETRIES}) — retrying in ${RETRY_DELAY_MS}ms`);
+        await new Promise(resolve => setTimeout(resolve, RETRY_DELAY_MS));
+        continue;
+      } else {
+        throw new Error(`HireHop rate limit (429) for category ${categoryId} — all ${MAX_RETRIES} attempts failed`);
+      }
+    }
+
+    if (!response.ok) {
+      throw new Error(`HireHop API returned ${response.status} for category ${categoryId}`);
+    }
+
+    const text = await response.text();
+
+    // Check for HTML error (auth failure)
+    if (text.trim().startsWith('<')) {
+      throw new Error(`HireHop returned HTML for category ${categoryId} — likely auth error`);
+    }
+
+    const data = JSON.parse(text);
+    return Array.isArray(data) ? data : (data.items || []);
   }
-
-  const text = await response.text();
-
-  // Check for HTML error (auth failure)
-  if (text.trim().startsWith('<')) {
-    throw new Error(`HireHop returned HTML for category ${categoryId} — likely auth error`);
-  }
-
-  const data = JSON.parse(text);
-
-  // Response can be array or object with items property
-  return Array.isArray(data) ? data : (data.items || []);
 }
 
 
