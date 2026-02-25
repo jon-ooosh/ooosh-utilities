@@ -85,20 +85,14 @@ exports.handler = async (event) => {
   }
 
   try {
-    // Fetch categories sequentially WITH a deliberate pause between each call.
-    // HireHop allows max 3 requests/second on the export endpoint — without the
-    // delay, Node.js fires the next await within ~50ms of the last resolving,
-    // which still looks like a burst from HireHop's perspective.
-    // 400ms apart = max 2.5/sec — safely within the limit.
-    const pause = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+    // Fetch ALL stock in a single call (no cat= filter) then split by category in JS.
+    // This is the same approach used by the backline matcher — one request, no rate limit risk.
+    const allRaw = await fetchCategory(exportId, exportKey, null);
 
-    const decksRaw       = await fetchCategory(exportId, exportKey, CATEGORY_DECKS);
-    await pause(400);
-    const hardwareRaw    = await fetchCategory(exportId, exportKey, CATEGORY_HARDWARE);
-    await pause(400);
-    const screwjacksRaw  = await fetchCategory(exportId, exportKey, CATEGORY_SCREWJACKS);
-    await pause(400);
-    const accessoriesRaw = await fetchCategory(exportId, exportKey, CATEGORY_ACCESSORIES);
+    const decksRaw       = allRaw.filter(i => parseInt(i.CAT || i.cat) === CATEGORY_DECKS);
+    const hardwareRaw    = allRaw.filter(i => parseInt(i.CAT || i.cat) === CATEGORY_HARDWARE);
+    const screwjacksRaw  = allRaw.filter(i => parseInt(i.CAT || i.cat) === CATEGORY_SCREWJACKS);
+    const accessoriesRaw = allRaw.filter(i => parseInt(i.CAT || i.cat) === CATEGORY_ACCESSORIES);
 
     // Parse into structured STOCK format
     // Handrails and steps can live in either hardware (446) or accessories (448)
@@ -172,13 +166,16 @@ exports.handler = async (event) => {
  * Returns array of raw item objects.
  */
 async function fetchCategory(exportId, exportKey, categoryId) {
+  // categoryId is optional — if null, fetches all stock (no cat= param)
   const params = new URLSearchParams({
     id: exportId,
     key: exportKey,
-    cat: categoryId,
     sidx: 'TITLE',
     sord: 'asc',
   });
+  if (categoryId !== null) {
+    params.set('cat', categoryId);
+  }
 
   const url = `${HIREHOP_EXPORT_URL}?${params.toString()}`;
 
