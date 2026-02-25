@@ -1044,7 +1044,7 @@ input[type="number"] {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  background: #1e2330;
+  background: #2d3748;
   border: 1px solid #2a3040;
   border-radius: 8px;
   padding: 10px 16px;
@@ -1063,7 +1063,7 @@ input[type="number"] {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  background: #1e2330;
+  background: #2d3748;
   border: 1px solid #2a3040;
   border-radius: 8px;
   padding: 10px 8px;

@@ -839,6 +839,42 @@
         }
       }
 
+      // ── Skirting ──
+      // A thin dark fabric drape on selected edges, hanging from just below the
+      // deck surface down to the ground. Driven by cfg.acc.{edge}.skirt = true.
+      // Uses the same edgeDefs already defined above for handrails/steps.
+      const skirtMat = new THREE.MeshStandardMaterial({
+        color: 0x1a1a1a,       // Very dark grey — close to black like real staging scrim
+        roughness: 0.95,
+        metalness: 0.0,
+        side: THREE.DoubleSide,  // Visible from both inside and outside
+      });
+      const SKIRT_THICKNESS = 0.05 * SCALE;  // ~0.6" — thin enough to look like fabric
+      // Hang from just under the deck surface down to the ground
+      const skirtHeight = stageHeight - DECK_THICKNESS;
+      const skirtMidY = skirtHeight / 2;
+
+      for (const [edgeName, sel] of Object.entries(acc)) {
+        if (!sel || !sel.skirt) continue;
+        const def = edgeDefs[edgeName];
+        if (!def) continue;
+
+        let skirtGeo, skirtMesh;
+        if (def.axis === 'x') {
+          // Front/back edges: drape runs along the X (length) axis
+          skirtGeo = new THREE.BoxGeometry(stageLength, skirtHeight, SKIRT_THICKNESS);
+          skirtMesh = new THREE.Mesh(skirtGeo, skirtMat);
+          skirtMesh.position.set(stageLength / 2, skirtMidY, def.fixed);
+        } else {
+          // Left/right edges: drape runs along the Z (width) axis
+          skirtGeo = new THREE.BoxGeometry(SKIRT_THICKNESS, skirtHeight, stageWidth);
+          skirtMesh = new THREE.Mesh(skirtGeo, skirtMat);
+          skirtMesh.position.set(def.fixed, skirtMidY, stageWidth / 2);
+        }
+        skirtMesh.receiveShadow = true;
+        scene.add(skirtMesh);
+      }
+
       // ── Audience label — vertical sign on the front face of the stage ──
       // "Front" (audience side) is at z = stageWidth.
       // Hanging it vertically on the front face means it's always clearly visible

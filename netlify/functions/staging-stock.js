@@ -5,8 +5,8 @@
  * Queries categories:
  *   445 — Decks/Platforms
  *   446 — Legs & Hardware (legs, combiners, wheels)
- *   447 — Screwjacks  ← ADDED (was missing, causing screwjacks to never appear)
- *   448 — Staging Accessories (handrails, steps)
+ *   447 — Screwjacks
+ *   448 — Staging Accessories (handrails, steps, skirting)
  * 
  * Includes a 10-minute in-memory cache to avoid hitting HireHop's
  * rate limit (60 req/min). The cache persists as long as the Netlify
@@ -24,7 +24,7 @@ const HIREHOP_EXPORT_URL = 'https://myhirehop.com/modules/stock/export_data.php'
 // Staging category IDs in HireHop
 const CATEGORY_DECKS = 445;
 const CATEGORY_HARDWARE = 446;
-const CATEGORY_SCREWJACKS = 447;   // ← was not being fetched before
+const CATEGORY_SCREWJACKS = 447;
 const CATEGORY_ACCESSORIES = 448;
 
 // Combiner height offset (universal constant — physical property, won't change)
@@ -100,7 +100,7 @@ exports.handler = async (event) => {
   }
 
   try {
-    // Fetch all four categories in parallel — category 447 (screwjacks) now included
+    // Fetch all four categories in parallel
     const [decksRaw, hardwareRaw, screwjacksRaw, accessoriesRaw] = await Promise.all([
       fetchCategory(exportId, exportKey, CATEGORY_DECKS),
       fetchCategory(exportId, exportKey, CATEGORY_HARDWARE),
@@ -116,16 +116,16 @@ exports.handler = async (event) => {
       decks: parseDecks(decksRaw),
       legs: parseLegs(hardwareRaw),
       combiners: parseCombiners(hardwareRaw),
-      screwjacks: parseScrewjacks(screwjacksRaw),   // ← now uses dedicated category 447 data
+      screwjacks: parseScrewjacks(screwjacksRaw),
       wheels: parseWheels(hardwareRaw),
       handrails: parseHandrails(allHardwareAndAccessories),
       steps: parseSteps(allHardwareAndAccessories),
+      skirts: parseSkirts(accessoriesRaw),   // ← skirts live in accessories category 448
     };
 
     const responseBody = JSON.stringify({
       success: true,
       stock,
-      // Include raw item count for debugging
       rawCounts: {
         decks: decksRaw.length,
         hardware: hardwareRaw.length,
@@ -139,7 +139,7 @@ exports.handler = async (event) => {
     // ── Write to cache ──
     cachedResponse = responseBody;
     cachedAt = Date.now();
-    console.log('Stock fetched from HireHop and cached. Screwjacks:', stock.screwjacks.length);
+    console.log('Stock fetched from HireHop and cached. Skirts:', stock.skirts.length);
 
     return {
       statusCode: 200,
@@ -324,7 +324,6 @@ function parseScrewjacks(rawItems) {
     if (qty <= 0) continue;
 
     // Extract total physical height in inches from name
-    // Handles: "19.5"", "8"", with optional space before quote
     const inchMatch = name.match(/(\d+\.?\d*)\s*["″]/);
     if (inchMatch) {
       const heightIn = parseFloat(inchMatch[1]);
@@ -450,4 +449,61 @@ function parseSteps(rawItems) {
   }
 
   return steps;
+}
+
+/**
+ * Parse skirting / scrim items from accessories category (448).
+ * 
+ * HireHop name patterns (confirmed from live stock):
+ *   "Black staging SKIRT - 1ft drop - 10ft length"         → heightIn: 12, lengthIn: 120
+ *   "Black staging SKIRT - 3ft drop - 8ft length"          → heightIn: 36, lengthIn: 96
+ *   "Black staging SKIRT - 3ft 6" drop (110cm) - 11ft length" → heightIn: 42, lengthIn: 132
+ * 
+ * The height is the "drop" (how far the skirt hangs down — matches stage height).
+ * The length is the individual piece length.
+ */
+function parseSkirts(rawItems) {
+  const skirts = [];
+
+  for (const item of rawItems) {
+    const name = item.NAME || item.name || '';
+    const qty = parseInt(item.QTY || item.qty || 0);
+
+    // Must be a SKIRT item
+    if (!name.match(/\bSKIRT\b/i)) continue;
+
+    // ── Parse drop height ──
+    // Try "Xft Y" drop" first (handles "3ft 6" drop (110cm)" etc.)
+    let heightIn = null;
+    const ftInMatch = name.match(/(\d+)ft\s+(\d+)["″]\s*drop/i);
+    if (ftInMatch) {
+      heightIn = parseInt(ftInMatch[1]) * 12 + parseInt(ftInMatch[2]);
+    } else {
+      // Plain "Xft drop"
+      const ftMatch = name.match(/(\d+)ft\s+drop/i);
+      if (ftMatch) {
+        heightIn = parseInt(ftMatch[1]) * 12;
+      }
+    }
+
+    if (heightIn === null) continue;
+
+    // ── Parse piece length ──
+    const lenMatch = name.match(/(\d+)ft\s+length/i);
+    if (!lenMatch) continue;
+    const lengthIn = parseInt(lenMatch[1]) * 12;
+
+    skirts.push({
+      name,
+      heightIn,
+      lengthIn,
+      qty,
+      hirehopId: item.ID || null,
+    });
+  }
+
+  // Sort by height then by length (longest pieces first within same height)
+  skirts.sort((a, b) => a.heightIn - b.heightIn || b.lengthIn - a.lengthIn);
+
+  return skirts;
 }

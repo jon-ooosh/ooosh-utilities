@@ -21,6 +21,7 @@ let STOCK = null;          // Set by fetchStock()
 let LEG_HEIGHTS = [];      // Rebuilt after stock loads
 let AVAILABILITY = null;   // Set by fetchAvailability() — date-specific availability data
 let stageRotated = false;  // Whether the 2D/3D layout is shown rotated 90° (swaps length and width axes)
+let wantsGafferTape = false; // D — whether the optional white gaffer tape roll has been selected
 
 // ── Availability caching ──
 // Tracks the last date range we fetched availability for.
@@ -939,6 +940,7 @@ async function fetchStock() {
     if (!STOCK.steps) STOCK.steps = [];
     if (!STOCK.screwjacks) STOCK.screwjacks = [];
     if (!STOCK.wheels) STOCK.wheels = [];
+    if (!STOCK.skirts) STOCK.skirts = [];   // C — skirting/scrim items
 
     // Rebuild LEG_HEIGHTS from live data
     LEG_HEIGHTS = STOCK.legs.map(l => l.heightIn).sort((a, b) => a - b);
@@ -1413,11 +1415,12 @@ async function handleCalculate(e) {
 
   // Reset accessory selections on new calculation
   accessorySelections = {
-    front: { handrail: false, steps: false, stepPosition: 'middle' },
-    back: { handrail: false, steps: false, stepPosition: 'middle' },
-    left: { handrail: false, steps: false, stepPosition: 'middle' },
-    right: { handrail: false, steps: false, stepPosition: 'middle' },
+    front: { handrail: false, steps: false, stepPosition: 'middle', skirt: false },
+    back:  { handrail: false, steps: false, stepPosition: 'middle', skirt: false },
+    left:  { handrail: false, steps: false, stepPosition: 'middle', skirt: false },
+    right: { handrail: false, steps: false, stepPosition: 'middle', skirt: false },
   };
+  wantsGafferTape = false;  // D — reset gaffer tape on new calculation
 
   // Use orientation-optimised calculation
   stageRotated = false;  // Reset rotation on each new calculation
@@ -1611,10 +1614,12 @@ function build3DViewUrl() {
     cm: r.input.combinerMode,
     // Display unit
     u: unit,
-    // Accessories: which edges have handrails/steps
+    // Accessories: which edges have handrails/steps/skirt
     acc: accessorySelections,
     // Whether the stage view is rotated 90° (swaps length/width axes in 3D scene)
     rot: stageRotated,
+    // D — whether white gaffer tape was selected (no 3D render, just for record)
+    tape: wantsGafferTape,
   };
 
   // Compress config using pako deflate + base64url encoding for shorter URLs
@@ -2090,10 +2095,10 @@ function renderLayoutVisual(layout, totalLength, totalWidth, unit, rotated) {
  * "Left" and "Right" run along the stage WIDTH.
  */
 let accessorySelections = {
-  front: { handrail: false, steps: false, stepPosition: 'middle' },
-  back: { handrail: false, steps: false, stepPosition: 'middle' },
-  left: { handrail: false, steps: false, stepPosition: 'middle' },
-  right: { handrail: false, steps: false, stepPosition: 'middle' },
+  front: { handrail: false, steps: false, stepPosition: 'middle', skirt: false },
+  back:  { handrail: false, steps: false, stepPosition: 'middle', skirt: false },
+  left:  { handrail: false, steps: false, stepPosition: 'middle', skirt: false },
+  right: { handrail: false, steps: false, stepPosition: 'middle', skirt: false },
 };
 
 /**
@@ -2176,21 +2181,19 @@ function calculateStepGapIn(stageHeightIn) {
 
 /**
  * Pick the best step size for the current stage height.
- * Steps come in fixed heights (e.g. 1ft, 2ft).
- * We pick the step whose height is closest to (but not exceeding) stage height.
+ * A — Exact match only. Steps must be exactly the stage height.
+ * If no exact match, returns null → shown as shortfall in the parts list.
+ * (A 1ft step cannot safely serve a 2ft stage, and vice versa.)
  * 
  * @param {number} stageHeightIn - Stage height in inches
  * @returns {Object|null} Best matching step from STOCK, or null
  */
 function pickBestStep(stageHeightIn) {
   if (!STOCK || !STOCK.steps || STOCK.steps.length === 0) return null;
-
-  // Filter steps that are <= stage height, sorted by height descending
-  const valid = STOCK.steps
-    .filter(s => s.heightIn > 0 && s.heightIn <= stageHeightIn)
-    .sort((a, b) => b.heightIn - a.heightIn);
-
-  return valid.length > 0 ? valid[0] : null;
+  // A — Exact match only. Steps must be exactly the stage height.
+  // If no exact match, returns null → shown as shortfall in the parts list.
+  // (A 1ft step cannot safely serve a 2ft stage, and vice versa.)
+  return STOCK.steps.find(s => s.heightIn === stageHeightIn) || null;
 }
 
 /**
@@ -2202,8 +2205,108 @@ function getStepWidthIn(step) {
 }
 
 /**
+ * B — Count shared edges between adjacent deck panels in the layout.
+ * A shared edge = two decks that touch along a full side.
+ * Each shared edge needs 2 × 70mm bolts.
+ * 
+ * Detection rules (matches the spec):
+ *   Vertical (side-by-side in same row): same y, and A.x + A.length === B.x
+ *   Horizontal (one row above the other): same x start, and A.y + A.width === B.y
+ * 
+ * Note: this is about deck frame joins only — completely independent of what
+ * legs or combiners are underneath.
+ * 
+ * @param {Array} layout - result.layout array from calculate()
+ * @returns {number} count of shared edges
+ */
+function countSharedDeckEdges(layout) {
+  let count = 0;
+  for (let i = 0; i < layout.length; i++) {
+    for (let j = i + 1; j < layout.length; j++) {
+      const a = layout[i];
+      const b = layout[j];
+
+      // Shared vertical edge: same row (y), and one deck's right side touches the other's left
+      const sameRow = a.y === b.y;
+      if (sameRow && (
+        a.x + a.orientedLength === b.x ||
+        b.x + b.orientedLength === a.x
+      )) {
+        count++;
+        continue;
+      }
+
+      // Shared horizontal edge: same x start, and one deck's bottom touches the other's top
+      const sameColStart = a.x === b.x;
+      if (sameColStart && (
+        a.y + a.orientedWidth === b.y ||
+        b.y + b.orientedWidth === a.y
+      )) {
+        count++;
+      }
+    }
+  }
+  return count;
+}
+
+/**
+ * C — Calculate skirting panels needed to cover a given edge length.
+ * Uses greedy fill: longest pieces first. Always rounds UP (a bit of overhang is fine).
+ * 
+ * Only uses skirts whose drop height is within ±3" of stage height — this handles
+ * minor rounding differences while still avoiding obviously wrong sizes.
+ * 
+ * @param {number} edgeLengthIn - Edge length to skirt, in inches
+ * @param {number} stageHeightIn - Stage height in inches (for matching skirt drop)
+ * @returns {Array} Array of { skirt, qty } objects
+ */
+function calculateSkirtSections(edgeLengthIn, stageHeightIn) {
+  if (!STOCK || !STOCK.skirts || STOCK.skirts.length === 0) return [];
+
+  // Find skirts with drop height within ±3" of stage height
+  // Sort longest pieces first for greedy fill
+  const valid = STOCK.skirts
+    .filter(s => Math.abs(s.heightIn - stageHeightIn) <= 3 && s.lengthIn > 0)
+    .sort((a, b) => b.lengthIn - a.lengthIn);
+
+  if (valid.length === 0) return [];
+
+  const result = [];
+  let remaining = edgeLengthIn;
+
+  // Greedy fill: use as many of each size as possible before moving to smaller
+  for (const skirt of valid) {
+    if (remaining <= 0) break;
+    const qty = Math.floor(remaining / skirt.lengthIn);
+    if (qty > 0) {
+      result.push({ skirt, qty });
+      remaining -= qty * skirt.lengthIn;
+    }
+  }
+
+  // Round up: if any length remains, add one more of the smallest valid piece
+  if (remaining > 0 && valid.length > 0) {
+    const smallest = valid[valid.length - 1];
+    const existing = result.find(r => r.skirt.name === smallest.name);
+    if (existing) {
+      existing.qty += 1;
+    } else {
+      result.push({ skirt: smallest, qty: 1 });
+    }
+  }
+
+  return result;
+}
+
+/**
  * Calculate all accessory parts based on current edge selections.
  * Returns an array of parts list entries (same format as compilePartsList).
+ * 
+ * Implements:
+ *   A — Steps: exact height match only (shortfall if no match)
+ *   B — Bolts: 70mm for deck joins, 90mm for handrail attachment
+ *   C — Skirting: per-edge skirt panels + velcro hook tape
+ *   D — Gaffer tape: optional global checkbox
  * 
  * @param {Object} result - The current calculation result
  * @returns {Array} Accessory parts list entries
@@ -2212,19 +2315,21 @@ function calculateAccessories(result) {
   if (!result || !result.success) return [];
   if (!STOCK) return [];
 
-  // Ensure arrays exist
+  // Ensure arrays exist (backward compat / safety)
   if (!STOCK.handrails) STOCK.handrails = [];
   if (!STOCK.steps) STOCK.steps = [];
+  if (!STOCK.skirts) STOCK.skirts = [];
 
   const lengthIn = result.result.actualLength.inches;
   const widthIn = result.result.actualWidth.inches;
   const heightIn = result.result.actualHeight.inches;
 
   const parts = [];
-  const handrailTotals = {};  // name → total qty needed
+  const handrailTotals = {};  // name → total qty across all edges
+  const skirtTotals = {};     // name → total qty across all skirted edges
 
-  // Determine edge lengths — when the view is rotated, the front/back edges run along the
-  // *width* dimension (they were left/right before rotation), and vice versa.
+  // Determine edge lengths — when the layout is rotated, front/back run along the
+  // *width* dimension and left/right run along the *length* dimension.
   const edgeLengths = stageRotated ? {
     front: widthIn,
     back:  widthIn,
@@ -2238,56 +2343,76 @@ function calculateAccessories(result) {
   };
 
   const warnings = [];
-  const stepEntries = {};  // name → { part entry } — aggregates qty across edges
+  const stepEntries = {};   // aggregated by step name (or missing key) across edges
 
-  // First pass: find all edges with steps and calculate handrail gaps
-  // We check per-edge now (any edge can independently have steps)
+  // ── A. Steps — exact match only ──
+  // pickBestStep() now returns null unless stage height exactly matches a step height.
+  // When null: add a shortfall line item so it shows clearly in the parts list.
   for (const [edge, sel] of Object.entries(accessorySelections)) {
-    if (sel.steps) {
-      const step = pickBestStep(heightIn);
-      const stepWidth = step ? getStepWidthIn(step) : 36;
-      const edgeLen = edgeLengths[edge];
+    if (!sel.steps) continue;
 
-      if (step) {
-        // Check if step width exceeds edge length
-        if (stepWidth > edgeLen) {
-          warnings.push(`⚠️ Steps (${inchesToFeetStr(stepWidth)} wide) exceed the ${edge} edge (${inchesToFeetStr(edgeLen)}). Consider placing steps on a longer edge.`);
-        }
+    const step = pickBestStep(heightIn);
+    const edgeLen = edgeLengths[edge];
 
-        // Aggregate step quantities — multiple edges may use the same step item
-        if (stepEntries[step.name]) {
-          stepEntries[step.name].qtyNeeded += 1;
-          stepEntries[step.name].note += `, ${edge} edge`;
-        } else {
-          stepEntries[step.name] = {
-            category: 'Accessories',
-            name: step.name,
-            qtyNeeded: 1,
-            qtyOwned: step.qty || 0,
-            note: `${edge} edge`,
-            hirehopId: step.hirehopId || null,
-          };
-        }
+    if (step) {
+      // Found an exact match — aggregate qty in case multiple edges have steps
+      const stepWidth = getStepWidthIn(step);
+      if (stepWidth > edgeLen) {
+        warnings.push(`⚠️ Steps (${inchesToFeetStr(stepWidth)} wide) exceed the ${edge} edge (${inchesToFeetStr(edgeLen)}). Consider placing steps on a longer edge.`);
+      }
+      if (stepEntries[step.name]) {
+        stepEntries[step.name].qtyNeeded += 1;
+        stepEntries[step.name].note += `, ${edge} edge`;
       } else {
-        warnings.push(`⚠️ No steps available for ${inchesToFeetStr(heightIn)} stage height.`);
+        stepEntries[step.name] = {
+          category: 'Accessories',
+          name: step.name,
+          qtyNeeded: 1,
+          qtyOwned: step.qty || 0,
+          note: `${edge} edge`,
+          hirehopId: step.hirehopId || null,
+        };
+      }
+    } else {
+      // A — No exact match: flag as shortfall so it's clearly visible
+      warnings.push(`⚠️ No step in stock for ${inchesToFeetStr(heightIn)} stage height — sub-hire or check stock.`);
+      const missingKey = `__missing_step_${heightIn}`;
+      if (stepEntries[missingKey]) {
+        stepEntries[missingKey].qtyNeeded += 1;
+        stepEntries[missingKey].note += `, ${edge} edge`;
+      } else {
+        stepEntries[missingKey] = {
+          category: 'Accessories',
+          name: `${inchesToFeetStr(heightIn)} staging step`,
+          qtyNeeded: 1,
+          qtyOwned: 0,
+          note: `${edge} edge — not in stock at this exact height`,
+          hirehopId: null,
+        };
       }
     }
   }
 
-  // Second pass: calculate handrails — each edge independently
-  // If an edge also has steps, leave a gap in the handrail run for them
+  // ── Handrails + count 90mm bolt qty at the same time ──
+  let total90mmBolts = 0;
+
   for (const [edge, sel] of Object.entries(accessorySelections)) {
-    if (sel.handrail) {
-      const edgeLen = edgeLengths[edge];
+    if (!sel.handrail) continue;
 
-      // If this same edge also has steps, leave a gap for the step width
-      const stepGap = sel.steps ? calculateStepGapIn(heightIn) : 0;
+    const edgeLen = edgeLengths[edge];
+    const stepGap = sel.steps ? calculateStepGapIn(heightIn) : 0;
+    const sections = calculateHandrailSections(edgeLen, stepGap);
 
-      const sections = calculateHandrailSections(edgeLen, stepGap);
+    // B — 90mm bolt count: 2 bolts per section to attach to stage, 1 extra per internal join
+    // Formula per edge: (numSections × 2) + (numSections - 1) = numSections × 3 - 1
+    const numSections = sections.reduce((sum, s) => sum + s.qty, 0);
+    if (numSections > 0) {
+      total90mmBolts += numSections * 2 + (numSections - 1);
+    }
 
-      for (const { handrail, qty } of sections) {
-        handrailTotals[handrail.name] = (handrailTotals[handrail.name] || 0) + qty;
-      }
+    // Accumulate handrail totals across all edges
+    for (const { handrail, qty } of sections) {
+      handrailTotals[handrail.name] = (handrailTotals[handrail.name] || 0) + qty;
     }
   }
 
@@ -2307,7 +2432,7 @@ function calculateAccessories(result) {
     }
   }
 
-  // Add step entries (one per step item name, aggregated across all edges)
+  // Add step entries (aggregated across all edges)
   for (const entry of Object.values(stepEntries)) {
     parts.push({
       ...entry,
@@ -2315,9 +2440,107 @@ function calculateAccessories(result) {
     });
   }
 
-  // Store warnings for display
-  parts._accessoryWarnings = warnings;
+  // ── C. Skirting ──
+  let totalSkirtedLengthIn = 0;
 
+  for (const [edge, sel] of Object.entries(accessorySelections)) {
+    if (!sel.skirt) continue;
+
+    const edgeLen = edgeLengths[edge];
+    totalSkirtedLengthIn += edgeLen;
+
+    const skirtSections = calculateSkirtSections(edgeLen, heightIn);
+
+    if (skirtSections.length === 0) {
+      warnings.push(`⚠️ No skirting in stock for ${inchesToFeetStr(heightIn)} stage height (${edge} edge) — sub-hire needed.`);
+    }
+
+    for (const { skirt, qty } of skirtSections) {
+      skirtTotals[skirt.name] = (skirtTotals[skirt.name] || 0) + qty;
+    }
+  }
+
+  // Add skirt parts
+  if (STOCK.skirts) {
+    for (const skirt of STOCK.skirts) {
+      const needed = skirtTotals[skirt.name] || 0;
+      if (needed > 0) {
+        parts.push({
+          category: 'Skirting',
+          name: skirt.name,
+          qtyNeeded: needed,
+          qtyOwned: skirt.qty || 0,
+          shortfall: Math.max(0, needed - (skirt.qty || 0)),
+          note: '',
+          hirehopId: skirt.hirehopId || null,
+        });
+      }
+    }
+  }
+
+  // ── B. Bolts (Fixings category) ──
+  // Hardcoded owned quantities — these are consumables kept in bulk.
+  const BOLT_70MM_OWNED = 90;
+  const BOLT_90MM_OWNED = 10;
+
+  // 70mm bolts: 2 per shared edge between adjacent deck panels
+  const sharedEdges = countSharedDeckEdges(result.layout);
+  const bolt70qty = sharedEdges * 2;
+
+  if (bolt70qty > 0) {
+    parts.push({
+      category: 'Fixings',
+      name: 'M10 70mm bolt, nut, 2 x washers',
+      qtyNeeded: bolt70qty,
+      qtyOwned: BOLT_70MM_OWNED,
+      shortfall: Math.max(0, bolt70qty - BOLT_70MM_OWNED),
+      note: `${sharedEdges} deck-to-deck joins × 2`,
+      hirehopId: 803,
+    });
+  }
+
+  // 90mm bolts: handrail attachment (calculated per edge above)
+  if (total90mmBolts > 0) {
+    parts.push({
+      category: 'Fixings',
+      name: 'M10 90mm bolt, nut, 2 x washers',
+      qtyNeeded: total90mmBolts,
+      qtyOwned: BOLT_90MM_OWNED,
+      shortfall: Math.max(0, total90mmBolts - BOLT_90MM_OWNED),
+      note: 'Handrail attachment bolts',
+      hirehopId: 1910,
+    });
+  }
+
+  // C. Velcro hook tape — required wherever skirting is used
+  // Total skirted perimeter in inches → metres, rounded up, +1m spare (always go over).
+  if (totalSkirtedLengthIn > 0) {
+    const velcroMetres = Math.ceil(totalSkirtedLengthIn * 0.0254) + 1;
+    parts.push({
+      category: 'Fixings',
+      name: 'Self adhesive Velcro - hook (per meter)',
+      qtyNeeded: velcroMetres,
+      qtyOwned: 0,   // consumable — always ordered per job, never in stock
+      shortfall: velcroMetres,
+      note: `${Math.ceil(totalSkirtedLengthIn * 0.0254)}m skirted perimeter + 1m spare`,
+      hirehopId: 1013,
+    });
+  }
+
+  // ── D. White gaffer tape (optional global checkbox) ──
+  if (wantsGafferTape) {
+    parts.push({
+      category: 'Consumables',
+      name: '2" (50mm x 50m) MagTape white gaffa tape',
+      qtyNeeded: 1,
+      qtyOwned: 0,
+      shortfall: 1,  // consumable — needs ordering
+      note: 'Optional — add if requested',
+      hirehopId: 740,
+    });
+  }
+
+  parts._accessoryWarnings = warnings;
   return parts;
 }
 
@@ -2473,6 +2696,17 @@ function renderAccessoriesSection(result) {
     html += `<p style="color:#6b7280; margin-top:12px">No matching accessories found in stock.</p>`;
   }
 
+  // ── D. Gaffer tape checkbox — global option, not per-edge ──
+  html += `<div style="margin-top:16px; padding-top:12px; border-top:1px solid #374151">
+    <label style="display:flex; align-items:center; gap:8px; cursor:pointer; color:#e5e7eb; font-size:14px; font-weight:500">
+      <input type="checkbox" id="gaffer-tape-checkbox"
+        ${wantsGafferTape ? 'checked' : ''}
+        onchange="wantsGafferTape = this.checked; refreshAccessoriesAndPush()"
+        style="width:16px; height:16px; accent-color:#6366f1; cursor:pointer; flex-shrink:0">
+      🗒️ Add white gaffer tape — 1 roll (2" MagTape, 50m)
+    </label>
+  </div>`;
+
   // Close the result-card div
   html += `</div>`;
   return html;
@@ -2480,16 +2714,19 @@ function renderAccessoriesSection(result) {
 
 /**
  * Render a horizontal edge selector row (for front/back edges).
- * Each edge has independent Handrail and Steps toggle buttons.
+ * Each edge has independent Handrail, Steps, and Skirt toggle buttons.
  */
 function renderEdgeRow(key, label, lengthLabel) {
   const sel = accessorySelections[key];
+  // "None" is active only when all three accessories are off
+  const noneActive = !sel.handrail && !sel.steps && !sel.skirt;
   let html = `<div class="edge-row">
     <span class="edge-label">${label} <span class="edge-length">(${lengthLabel})</span></span>
     <div class="edge-options">
-      <button class="edge-btn ${!sel.handrail && !sel.steps ? 'active' : ''}" onclick="clearEdge('${key}')">None</button>
+      <button class="edge-btn ${noneActive ? 'active' : ''}" onclick="clearEdge('${key}')">None</button>
       <button class="edge-btn ${sel.handrail ? 'active' : ''}" onclick="toggleEdge('${key}','handrail')">🛡️ Handrail</button>
       <button class="edge-btn ${sel.steps ? 'active' : ''}" onclick="toggleEdge('${key}','steps')">🪜 Steps</button>
+      <button class="edge-btn ${sel.skirt ? 'active' : ''}" onclick="toggleEdge('${key}','skirt')">🎭 Skirt</button>
     </div>`;
 
   // Show step position selector when both handrail AND steps are on this edge
@@ -2503,16 +2740,19 @@ function renderEdgeRow(key, label, lengthLabel) {
 
 /**
  * Render a vertical edge selector (for left/right edges).
- * Each edge has independent Handrail and Steps toggle buttons.
+ * Each edge has independent Handrail, Steps, and Skirt toggle buttons.
  */
 function renderEdgeSide(key, label, lengthLabel) {
   const sel = accessorySelections[key];
+  // "None" is active only when all three accessories are off
+  const noneActive = !sel.handrail && !sel.steps && !sel.skirt;
   let html = `<div class="edge-side">
     <span class="edge-label">${label} <span class="edge-length">(${lengthLabel})</span></span>
     <div class="edge-options edge-options-vertical">
-      <button class="edge-btn edge-btn-sm ${!sel.handrail && !sel.steps ? 'active' : ''}" onclick="clearEdge('${key}')">None</button>
+      <button class="edge-btn edge-btn-sm ${noneActive ? 'active' : ''}" onclick="clearEdge('${key}')">None</button>
       <button class="edge-btn edge-btn-sm ${sel.handrail ? 'active' : ''}" onclick="toggleEdge('${key}','handrail')">🛡️</button>
       <button class="edge-btn edge-btn-sm ${sel.steps ? 'active' : ''}" onclick="toggleEdge('${key}','steps')">🪜</button>
+      <button class="edge-btn edge-btn-sm ${sel.skirt ? 'active' : ''}" onclick="toggleEdge('${key}','skirt')">🎭</button>
     </div>`;
 
   // Show step position selector when both handrail AND steps are on this edge
@@ -2573,12 +2813,13 @@ function toggleEdge(edge, type) {
 }
 
 /**
- * Clear all accessories from an edge (set both handrail and steps to false).
+ * Clear all accessories from an edge (set handrail, steps, and skirt to false).
  */
 function clearEdge(edge) {
   accessorySelections[edge].handrail = false;
   accessorySelections[edge].steps = false;
   accessorySelections[edge].stepPosition = 'middle';
+  accessorySelections[edge].skirt = false;  // C — also clear skirt
 
   refreshAccessoriesAndPush();
 }
