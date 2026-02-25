@@ -89,6 +89,14 @@ exports.handler = async (event) => {
     // This is the same approach used by the backline matcher — one request, no rate limit risk.
     const allRaw = await fetchCategory(exportId, exportKey, null);
 
+    // TEMPORARY DEBUG — log first item's keys so we can see the exact field name for category
+    if (allRaw.length > 0) {
+      console.log('Raw item field names:', Object.keys(allRaw[0]));
+      console.log('Raw item sample:', JSON.stringify(allRaw[0]));
+    }
+
+    const decksRaw       = allRaw.filter(i => parseInt(i.CAT || i.cat) === CATEGORY_DECKS);
+
     const decksRaw       = allRaw.filter(i => parseInt(i.CAT || i.cat) === CATEGORY_DECKS);
     const hardwareRaw    = allRaw.filter(i => parseInt(i.CAT || i.cat) === CATEGORY_HARDWARE);
     const screwjacksRaw  = allRaw.filter(i => parseInt(i.CAT || i.cat) === CATEGORY_SCREWJACKS);
