@@ -19,7 +19,12 @@
  * Returns: { success, stock, raw, timestamp, cached }
  */
 
+const { getStore } = require('@netlify/blobs');
+
 const HIREHOP_EXPORT_URL = 'https://myhirehop.com/modules/stock/export_data.php';
+
+// Blob cache key — all containers share this single entry
+const BLOB_CACHE_KEY = 'stock-cache';
 
 // Staging category IDs in HireHop
 const CATEGORY_DECKS = 445;
@@ -60,10 +65,6 @@ const headers = {
 
 const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
-let cachedResponse = null;   // The last successful JSON response body
-let cachedAt = 0;            // Timestamp (ms) when cache was written
-
-
 // ============================================================================
 // MAIN HANDLER
 // ============================================================================
@@ -74,15 +75,26 @@ exports.handler = async (event) => {
     return { statusCode: 204, headers, body: '' };
   }
 
-  // ── Check cache first ──
+  // ── Check shared Blob cache first ──
+  // This cache is shared across ALL Netlify container instances, unlike in-memory
+  // which only works within a single container. This prevents multiple containers
+  // from simultaneously hammering the HireHop API on cold starts.
   const now = Date.now();
-  if (cachedResponse && (now - cachedAt) < CACHE_TTL_MS) {
-    console.log(`Returning cached stock (age: ${Math.round((now - cachedAt) / 1000)}s)`);
-    return {
-      statusCode: 200,
-      headers,
-      body: cachedResponse,
-    };
+  try {
+    const store = getStore('staging-stock');
+    const cached = await store.get(BLOB_CACHE_KEY, { type: 'json' });
+    if (cached && cached.cachedAt && (now - cached.cachedAt) < CACHE_TTL_MS) {
+      const ageSeconds = Math.round((now - cached.cachedAt) / 1000);
+      console.log(`Returning shared blob cache (age: ${ageSeconds}s)`);
+      return {
+        statusCode: 200,
+        headers,
+        body: JSON.stringify({ ...cached.data, cached: true }),
+      };
+    }
+  } catch (blobErr) {
+    // Blob read failure is non-fatal — just fetch fresh from HireHop
+    console.warn('Blob cache read failed (non-fatal):', blobErr.message);
   }
 
   const exportId = process.env.HIREHOP_EXPORT_ID;
@@ -135,10 +147,19 @@ exports.handler = async (event) => {
       cached: false,
     });
 
-    // ── Write to cache ──
-    cachedResponse = responseBody;
-    cachedAt = Date.now();
-    console.log('Stock fetched from HireHop and cached. Skirts:', stock.skirts.length);
+   // ── Write to shared Blob cache ──
+    // All future container instances will read from here instead of hitting HireHop
+    try {
+      const store = getStore('staging-stock');
+      await store.setJSON(BLOB_CACHE_KEY, {
+        cachedAt: Date.now(),
+        data: JSON.parse(responseBody),
+      });
+      console.log('Stock fetched from HireHop and written to shared blob cache. Skirts:', stock.skirts.length);
+    } catch (blobErr) {
+      // Blob write failure is non-fatal — response still goes to the user
+      console.warn('Blob cache write failed (non-fatal):', blobErr.message);
+    }
 
     return {
       statusCode: 200,
@@ -148,14 +169,20 @@ exports.handler = async (event) => {
   } catch (err) {
     console.error('Staging stock fetch error:', err);
 
-    // ── If fetch fails but we have stale cache, serve it rather than error ──
-    if (cachedResponse) {
-      console.log('HireHop fetch failed — returning stale cache as fallback');
-      return {
-        statusCode: 200,
-        headers,
-        body: cachedResponse,
-      };
+    // ── If fetch fails, try serving stale blob cache rather than a hard error ──
+    try {
+      const store = getStore('staging-stock');
+      const stale = await store.get(BLOB_CACHE_KEY, { type: 'json' });
+      if (stale && stale.data) {
+        console.log('HireHop fetch failed — returning stale blob cache as fallback');
+        return {
+          statusCode: 200,
+          headers,
+          body: JSON.stringify({ ...stale.data, cached: true, stale: true }),
+        };
+      }
+    } catch (blobErr) {
+      console.warn('Stale blob fallback also failed:', blobErr.message);
     }
 
     return {
