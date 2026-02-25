@@ -89,11 +89,12 @@ exports.handler = async (event) => {
     // This is the same approach used by the backline matcher — one request, no rate limit risk.
     const allRaw = await fetchCategory(exportId, exportKey, null);
 
-    // TEMPORARY DEBUG — log first item's keys so we can see the exact field name for category
-    if (allRaw.length > 0) {
-      console.log('Raw item field names:', Object.keys(allRaw[0]));
-      console.log('Raw item sample:', JSON.stringify(allRaw[0]));
-    }
+    const decksRaw       = allRaw.filter(i => i.CATEGORY_ID === CATEGORY_DECKS);
+    const hardwareRaw    = allRaw.filter(i => i.CATEGORY_ID === CATEGORY_HARDWARE);
+    const screwjacksRaw  = allRaw.filter(i => i.CATEGORY_ID === CATEGORY_SCREWJACKS);
+    const accessoriesRaw = allRaw.filter(i => i.CATEGORY_ID === CATEGORY_ACCESSORIES);
+
+    console.log(`Stock split — decks: ${decksRaw.length}, hardware: ${hardwareRaw.length}, screwjacks: ${screwjacksRaw.length}, accessories: ${accessoriesRaw.length}`);
 
     // Parse into structured STOCK format
     // Handrails and steps can live in either hardware (446) or accessories (448)
