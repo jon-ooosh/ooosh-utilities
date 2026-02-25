@@ -95,13 +95,6 @@ exports.handler = async (event) => {
       console.log('Raw item sample:', JSON.stringify(allRaw[0]));
     }
 
-    const decksRaw       = allRaw.filter(i => parseInt(i.CAT || i.cat) === CATEGORY_DECKS);
-
-    const decksRaw       = allRaw.filter(i => parseInt(i.CAT || i.cat) === CATEGORY_DECKS);
-    const hardwareRaw    = allRaw.filter(i => parseInt(i.CAT || i.cat) === CATEGORY_HARDWARE);
-    const screwjacksRaw  = allRaw.filter(i => parseInt(i.CAT || i.cat) === CATEGORY_SCREWJACKS);
-    const accessoriesRaw = allRaw.filter(i => parseInt(i.CAT || i.cat) === CATEGORY_ACCESSORIES);
-
     // Parse into structured STOCK format
     // Handrails and steps can live in either hardware (446) or accessories (448)
     const allHardwareAndAccessories = [...hardwareRaw, ...accessoriesRaw];
