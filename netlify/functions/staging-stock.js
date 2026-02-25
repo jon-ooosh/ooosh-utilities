@@ -85,11 +85,19 @@ exports.handler = async (event) => {
   }
 
   try {
-    // Fetch categories sequentially to avoid bursting HireHop's rate limit
-    // (limit is 3 req/second — parallel fetches reliably trigger 429s)
+    // Fetch categories sequentially WITH a deliberate pause between each call.
+    // HireHop allows max 3 requests/second on the export endpoint — without the
+    // delay, Node.js fires the next await within ~50ms of the last resolving,
+    // which still looks like a burst from HireHop's perspective.
+    // 400ms apart = max 2.5/sec — safely within the limit.
+    const pause = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
     const decksRaw       = await fetchCategory(exportId, exportKey, CATEGORY_DECKS);
+    await pause(400);
     const hardwareRaw    = await fetchCategory(exportId, exportKey, CATEGORY_HARDWARE);
+    await pause(400);
     const screwjacksRaw  = await fetchCategory(exportId, exportKey, CATEGORY_SCREWJACKS);
+    await pause(400);
     const accessoriesRaw = await fetchCategory(exportId, exportKey, CATEGORY_ACCESSORIES);
 
     // Parse into structured STOCK format
