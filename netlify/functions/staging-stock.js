@@ -159,7 +159,7 @@ exports.handler = async (event) => {
     } catch (blobErr) {
       // Blob write failure is non-fatal — response still goes to the user
       console.warn('Blob cache write failed (non-fatal):', blobErr.message);
-    }
+    } 
 
     return {
       statusCode: 200,
